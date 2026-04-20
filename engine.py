@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import math
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 
@@ -7,31 +8,23 @@ API_KEY = None
 
 
 # -----------------------------
-# DATA ACTUAL (ÚLTIMAS VELAS)
+# DATA
 # -----------------------------
 def get_data(symbol, tf):
 
-    if tf == "hour":
-        multiplier = "1"
-        timespan = "hour"
-    elif tf == "day":
-        multiplier = "1"
-        timespan = "day"
+    timespan = "hour" if tf == "hour" else "day"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
 
     r = requests.get(url).json()
 
-    if 'results' not in r:
+    if "results" not in r:
         return None
 
-    df = pd.DataFrame(r['results'])
+    df = pd.DataFrame(r["results"]).sort_values("t")
 
-    # ordenar correctamente
-    df = df.sort_values(by='t')
-
-    df['close'] = df['c']
-    df['volume'] = df['v']
+    df["close"] = df["c"]
+    df["volume"] = df["v"]
 
     return df
 
@@ -40,47 +33,131 @@ def get_data(symbol, tf):
 # INDICADORES
 # -----------------------------
 def add_ind(df):
-    df['ema20'] = EMAIndicator(df['close'], 20).ema_indicator()
-    df['ema40'] = EMAIndicator(df['close'], 40).ema_indicator()
-    df['ema100'] = EMAIndicator(df['close'], 100).ema_indicator()
-    df['ema200'] = EMAIndicator(df['close'], 200).ema_indicator()
-    df['rsi'] = RSIIndicator(df['close'], 14).rsi()
+    df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
+    df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
+    df["ema100"] = EMAIndicator(df["close"], 100).ema_indicator()
+    df["rsi"] = RSIIndicator(df["close"], 14).rsi()
     return df
 
 
 # -----------------------------
-# VIX
+# OPTIONS CHAIN
 # -----------------------------
-def vix_trend():
-    v = get_data("VIX", "day")
+def get_option_chain(symbol):
 
-    if v is None or len(v) < 6:
+    url = f"https://api.polygon.io/v2/snapshot/options/{symbol}?apiKey={API_KEY}"
+    r = requests.get(url).json()
+
+    if "results" not in r:
+        return None
+
+    return r["results"]
+
+
+# -----------------------------
+# SELECCIÓN DE OPCIÓN
+# -----------------------------
+def pick_best_option(chain, price, direction):
+
+    best = None
+    best_score = 0
+
+    for opt in chain:
+        try:
+            strike = opt["details"]["strike_price"]
+            delta = opt["greeks"]["delta"]
+            premium = opt["last_trade"]["price"]
+            volume = opt["day"]["volume"]
+
+            if premium < 0.3 or volume < 50:
+                continue
+
+            score = 0
+
+            if direction == "CALL":
+                if 0.3 < delta < 0.6:
+                    score += 2
+                if strike <= price:
+                    score += 1
+
+            if direction == "PUT":
+                if -0.6 < delta < -0.3:
+                    score += 2
+                if strike >= price:
+                    score += 1
+
+            if score > best_score:
+                best_score = score
+                best = opt
+
+        except:
+            continue
+
+    return best
+
+
+# -----------------------------
+# NORMAL CDF
+# -----------------------------
+def norm_cdf(x):
+    return (1 + math.erf(x / math.sqrt(2))) / 2
+
+
+# -----------------------------
+# BLACK-SCHOLES
+# -----------------------------
+def black_scholes(S, K, T, r, sigma, call=True):
+
+    if T <= 0:
         return 0
 
-    return v['close'].iloc[-1] - v['close'].iloc[-5]
+    d1 = (math.log(S / K) + (r + sigma**2 / 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
 
-
-# -----------------------------
-# SELECCIÓN DE OPCIONES PRO
-# -----------------------------
-def select_option(price, direction):
-
-    strike = round(price)
-
-    if direction == "CALL":
-        strike -= 1
+    if call:
+        return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
     else:
-        strike += 1
+        return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+
+
+# -----------------------------
+# ESTIMACIÓN
+# -----------------------------
+def estimate(price, option, direction):
+
+    strike = option["details"]["strike_price"]
+    premium = option["last_trade"]["price"]
+    delta = abs(option["greeks"]["delta"])
+
+    expected_move = price * 0.003  # 0.3%
+
+    future_price = price + expected_move if direction == "CALL" else price - expected_move
+
+    sigma = 0.2
+    T = 2 / 365
+    r = 0.01
+
+    theoretical = black_scholes(
+        future_price,
+        strike,
+        T,
+        r,
+        sigma,
+        call=(direction == "CALL")
+    )
+
+    roi = (theoretical - premium) / premium
 
     return {
-        "strike": strike,
-        "dte": "1-3",
-        "delta": "0.35-0.50"
+        "premium": round(premium, 2),
+        "theoretical": round(theoretical, 2),
+        "roi": round(roi * 100, 2),
+        "delta": round(delta, 2),
     }
 
 
 # -----------------------------
-# MOTOR DE SEÑALES
+# SIGNAL
 # -----------------------------
 def signal(symbol):
 
@@ -93,84 +170,56 @@ def signal(symbol):
     h1 = add_ind(h1)
     d1 = add_ind(d1)
 
-    # 🔥 usar vela cerrada (más estable)
     last = h1.iloc[-2]
 
     score = 0
 
-    # -----------------------------
-    # TENDENCIA DIARIA
-    # -----------------------------
-    daily_up = (
-        d1['ema20'].iloc[-1] > d1['ema40'].iloc[-1] >
-        d1['ema100'].iloc[-1]
-    )
-
-    if daily_up:
+    # tendencia
+    if d1["ema20"].iloc[-1] > d1["ema40"].iloc[-1]:
         score += 2
     else:
         score -= 2
 
-    # -----------------------------
-    # BREAKOUT
-    # -----------------------------
-    high = h1['close'].iloc[-15:].max()
-    low = h1['close'].iloc[-15:].min()
+    # breakout
+    high = h1["close"].iloc[-15:].max()
+    low = h1["close"].iloc[-15:].min()
 
-    if last['close'] > high:
+    if last["close"] > high:
         score += 2
-    if last['close'] < low:
+    if last["close"] < low:
         score -= 2
 
-    # -----------------------------
-    # VOLUMEN
-    # -----------------------------
-    vol_mean = h1['volume'].rolling(20).mean().iloc[-2]
-
-    if last['volume'] > vol_mean:
-        score += 1
-
-    # -----------------------------
     # RSI
-    # -----------------------------
-    if 50 <= last['rsi'] <= 70:
+    if 50 <= last["rsi"] <= 70:
         score += 1
-    if 30 <= last['rsi'] <= 50:
+    if 30 <= last["rsi"] <= 50:
         score -= 1
 
-    # -----------------------------
-    # VIX
-    # -----------------------------
-    vix = vix_trend()
+    print(f"{symbol} SCORE: {score}")
 
-    if vix < 1:
-        score += 1
-    if vix > 1:
-        score -= 1
-
-    # -----------------------------
-    # DEBUG
-    # -----------------------------
-    print(f"{symbol} | FINAL SCORE: {score} | price: {round(last['close'],2)}")
-
-    # -----------------------------
-    # DIRECCIÓN
-    # -----------------------------
     direction = "CALL" if score > 0 else "PUT"
 
-    # -----------------------------
-    # FILTRO FINAL (BALANCEADO)
-    # -----------------------------
     if abs(score) >= 3:
 
-        option = select_option(last['close'], direction)
+        chain = get_option_chain(symbol)
+        if not chain:
+            return None
+
+        option = pick_best_option(chain, last["close"], direction)
+        if not option:
+            return None
+
+        est = estimate(last["close"], option, direction)
 
         return {
             "symbol": symbol,
             "direction": direction,
-            "price": float(round(last['close'], 2)),
-            "score": float(score),
-            "option": option
+            "price": round(last["close"], 2),
+            "score": score,
+            "strike": option["details"]["strike_price"],
+            "premium": est["premium"],
+            "roi": est["roi"],
+            "delta": est["delta"],
         }
 
     return None
