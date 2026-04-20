@@ -59,7 +59,7 @@ def signal(symbol):
         if last['ema20'] < last['ema40']: score += 1
         direction = "PUT"
 
-    if direction and score >= 7:
+    if direction and score >= 6:
         return {
             "symbol": symbol,
             "direction": direction,
