@@ -16,6 +16,9 @@ engine.API_KEY = API_KEY
 
 app = Flask(__name__)
 
+last_signals = {}
+last_time = {}
+
 
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -24,54 +27,58 @@ def send(msg):
 
 @app.route("/")
 def home():
-    return "BOT PROFESIONAL ACTIVO 🚀"
+    return "BOT ACTIVO"
 
 
 def loop():
 
-    send("🔥 BOT CON GESTION PROFESIONAL ACTIVO")
-
-    active_trades = 0
-    max_trades = 3
+    send("🚀 BOT PROFESIONAL ACTIVO")
 
     while True:
         try:
             for sym in ["SPY", "QQQ"]:
 
-                if active_trades >= max_trades:
-                    continue
-
                 sig = engine.signal(sym)
 
-                if sig:
+                if not sig:
+                    continue
 
-                    contracts = position_size(sig["premium"])
+                key = f"{sym}_{sig['direction']}"
 
-                    msg = (
-                        f"🔥 {sig['direction']} {sym}\n"
-                        f"Tipo: {sig['type']}\n"
-                        f"Precio: {sig['price']}\n\n"
-                        f"Strike: {sig['strike']}\n"
-                        f"Prima: {sig['premium']}\n"
-                        f"Contratos: {contracts}\n\n"
-                        f"SL: -30%\n"
-                        f"TP: +50%\n\n"
-                        f"Score: {sig['score']}\n"
-                        f"VIX: {sig['vix']}"
-                    )
+                now = time.time()
 
-                    send(msg)
+                if last_signals.get(sym) == key:
+                    continue
 
-                    log_trade(
-                        sig["symbol"],
-                        sig["direction"],
-                        sig["price"],
-                        sig["strike"],
-                        sig["premium"],
-                        sig["score"]
-                    )
+                if sym in last_time and now - last_time[sym] < 1800:
+                    continue
 
-                    active_trades += 1
+                last_signals[sym] = key
+                last_time[sym] = now
+
+                contracts = position_size(sig["premium"], sig["score"])
+
+                if contracts == 0:
+                    continue
+
+                msg = (
+                    f"🔥 {sig['direction']} {sym}\n"
+                    f"Precio: {sig['price']}\n"
+                    f"Score: {sig['score']}\n\n"
+                    f"Contratos: {contracts}\n"
+                    f"Strike: {sig['strike']}\n"
+                    f"Prima: {sig['premium']}\n\n"
+                    f"SL: -30% | TP: +50%"
+                )
+
+                send(msg)
+
+                log_trade(
+                    sig["symbol"],
+                    sig["direction"],
+                    sig["price"],
+                    sig["score"]
+                )
 
             time.sleep(300)
 
