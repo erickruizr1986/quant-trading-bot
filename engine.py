@@ -48,7 +48,7 @@ def signal(symbol):
     # CALL
     if last['close'] > high and vol_ok and daily_up and vix <= 0:
         score += 6
-        if 50 <= last['rsi'] <= 65: score += 1
+        if 50 <= last['rsi'] <= 70: score += 1
         if last['ema20'] > last['ema40']: score += 1
         direction = "CALL"
 
