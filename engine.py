@@ -2,6 +2,8 @@ import requests
 import pandas as pd
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
+from datetime import datetime
+import pytz
 
 API_KEY = None
 
@@ -10,7 +12,7 @@ def get_data(symbol, tf):
 
     timespan = "hour" if tf == "hour" else "day"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=150&apiKey={API_KEY}"
 
     r = requests.get(url).json()
 
@@ -18,7 +20,12 @@ def get_data(symbol, tf):
         return None
 
     df = pd.DataFrame(r["results"]).sort_values("t")
+
     df["close"] = df["c"]
+    df["open"] = df["o"]
+    df["high"] = df["h"]
+    df["low"] = df["l"]
+    df["volume"] = df["v"]
 
     return df
 
@@ -27,6 +34,7 @@ def add_ind(df):
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
+    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     return df
 
 
@@ -38,6 +46,20 @@ def get_vix_trend():
         return 0
 
     return vix["close"].iloc[-1] - vix["close"].iloc[-5]
+
+
+def valid_session():
+
+    ny = pytz.timezone("America/New_York")
+    now = datetime.now(ny)
+
+    hour = now.hour
+    minute = now.minute
+
+    if (hour > 9 or (hour == 9 and minute >= 30)) and hour < 16:
+        return True
+
+    return False
 
 
 def simulate_option(price, direction):
@@ -62,6 +84,9 @@ def simulate_option(price, direction):
 
 def signal(symbol):
 
+    if not valid_session():
+        return None
+
     h1 = get_data(symbol, "hour")
     d1 = get_data(symbol, "day")
 
@@ -76,10 +101,14 @@ def signal(symbol):
     score = 0
 
     # tendencia
-    if d1["ema20"].iloc[-1] > d1["ema40"].iloc[-1]:
+    ema_slope = d1["ema20"].iloc[-1] - d1["ema20"].iloc[-5]
+
+    if d1["ema20"].iloc[-1] > d1["ema40"].iloc[-1] and ema_slope > 0:
         score += 2
-    else:
+    elif d1["ema20"].iloc[-1] < d1["ema40"].iloc[-1] and ema_slope < 0:
         score -= 2
+    else:
+        return None
 
     # breakout
     high = h1["close"].iloc[-15:].max()
@@ -87,30 +116,35 @@ def signal(symbol):
 
     if last["close"] > high:
         score += 2
-    if last["close"] < low:
+    elif last["close"] < low:
         score -= 2
+    else:
+        return None
+
+    # volumen
+    vol_mean = h1["volume"].rolling(20).mean().iloc[-1]
+    if last["volume"] < vol_mean:
+        return None
 
     # RSI
     if 50 <= last["rsi"] <= 70:
         score += 1
-    if 30 <= last["rsi"] <= 50:
+    elif 30 <= last["rsi"] <= 50:
         score -= 1
 
     # VIX
     vix = get_vix_trend()
-
     if vix < -1:
         score += 1
     elif vix > 1:
         score -= 1
 
-    print(f"{symbol} SCORE: {score} | VIX: {round(vix,2)}")
+    print(f"{symbol} SCORE: {score}")
 
-    if abs(score) < 2:
+    if abs(score) < 3:
         return None
 
     direction = "CALL" if score > 0 else "PUT"
-    signal_type = "A+" if abs(score) >= 3 else "B"
 
     strike, premium, delta, roi = simulate_option(last["close"], direction)
 
@@ -119,10 +153,9 @@ def signal(symbol):
         "direction": direction,
         "price": round(last["close"], 2),
         "score": score,
-        "type": signal_type,
+        "type": "PRO",
         "strike": strike,
         "premium": premium,
         "delta": delta,
-        "roi": roi,
-        "vix": round(vix, 2)
+        "roi": roi
     }
