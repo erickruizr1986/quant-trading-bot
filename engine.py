@@ -5,22 +5,12 @@ from ta.momentum import RSIIndicator
 
 API_KEY = None
 
-# -----------------------------
-# PARÁMETROS (OPTIMIZABLES)
-# -----------------------------
-BREAKOUT_WINDOW = 15
-THRESHOLD = 3
-VOL_MULT = 1.5
 
-
-# -----------------------------
-# DATA
-# -----------------------------
 def get_data(symbol, tf):
 
     timespan = "hour" if tf == "hour" else "day"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=200&apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
 
     r = requests.get(url).json()
 
@@ -28,16 +18,11 @@ def get_data(symbol, tf):
         return None
 
     df = pd.DataFrame(r["results"]).sort_values("t")
-
     df["close"] = df["c"]
-    df["volume"] = df["v"]
 
     return df
 
 
-# -----------------------------
-# INDICADORES
-# -----------------------------
 def add_ind(df):
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
@@ -45,51 +30,36 @@ def add_ind(df):
     return df
 
 
-# -----------------------------
-# VOLATILIDAD
-# -----------------------------
-def calc_volatility(df):
-    return df["close"].pct_change().rolling(20).std().iloc[-1]
+def get_vix_trend():
+
+    vix = get_data("VIX", "day")
+
+    if vix is None or len(vix) < 5:
+        return 0
+
+    return vix["close"].iloc[-1] - vix["close"].iloc[-5]
 
 
-# -----------------------------
-# OPCIÓN SIMULADA PRO
-# -----------------------------
-def simulate_option(price, direction, vol):
+def simulate_option(price, direction):
 
     strike = round(price)
 
     if direction == "CALL":
         strike -= 1
-        moneyness = (price - strike) / price
+        delta = 0.4
     else:
         strike += 1
-        moneyness = (strike - price) / price
+        delta = 0.4
 
-    delta = 0.3 + (moneyness * 5)
-    delta = max(0.3, min(delta, 0.6))
-
-    premium = max(0.8, price * vol * VOL_MULT)
-
-    expected_move = price * (vol * 1.5)
+    premium = 1.2
+    expected_move = price * 0.003
 
     gain = expected_move * delta
+    roi = (gain / premium) * 100
 
-    future_price = premium + gain
-
-    roi = (future_price - premium) / premium * 100
-
-    return {
-        "strike": strike,
-        "premium": round(premium, 2),
-        "delta": round(delta, 2),
-        "roi": round(roi, 2)
-    }
+    return strike, premium, delta, round(roi, 2)
 
 
-# -----------------------------
-# SIGNAL
-# -----------------------------
 def signal(symbol):
 
     h1 = get_data(symbol, "hour")
@@ -111,9 +81,9 @@ def signal(symbol):
     else:
         score -= 2
 
-    # breakout dinámico
-    high = h1["close"].iloc[-BREAKOUT_WINDOW:].max()
-    low = h1["close"].iloc[-BREAKOUT_WINDOW:].min()
+    # breakout
+    high = h1["close"].iloc[-15:].max()
+    low = h1["close"].iloc[-15:].min()
 
     if last["close"] > high:
         score += 2
@@ -126,24 +96,33 @@ def signal(symbol):
     if 30 <= last["rsi"] <= 50:
         score -= 1
 
-    print(f"{symbol} SCORE: {score}")
+    # VIX
+    vix = get_vix_trend()
 
-    if abs(score) < THRESHOLD:
+    if vix < -1:
+        score += 1
+    elif vix > 1:
+        score -= 1
+
+    print(f"{symbol} SCORE: {score} | VIX: {round(vix,2)}")
+
+    if abs(score) < 2:
         return None
 
     direction = "CALL" if score > 0 else "PUT"
+    signal_type = "A+" if abs(score) >= 3 else "B"
 
-    vol = calc_volatility(h1)
-
-    option = simulate_option(last["close"], direction, vol)
+    strike, premium, delta, roi = simulate_option(last["close"], direction)
 
     return {
         "symbol": symbol,
         "direction": direction,
         "price": round(last["close"], 2),
         "score": score,
-        "strike": option["strike"],
-        "premium": option["premium"],
-        "roi": option["roi"],
-        "delta": option["delta"],
+        "type": signal_type,
+        "strike": strike,
+        "premium": premium,
+        "delta": delta,
+        "roi": roi,
+        "vix": round(vix, 2)
     }
