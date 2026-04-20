@@ -10,23 +10,28 @@ API_KEY = None
 # -----------------------------
 # DATA
 # -----------------------------
-def get_data(symbol, tf):
+def get_option_chain(symbol):
 
-    timespan = "hour" if tf == "hour" else "day"
+    url = f"https://api.polygon.io/v2/snapshot/options/{symbol}?apiKey={API_KEY}"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
+    try:
+        r = requests.get(url)
 
-    r = requests.get(url).json()
+        if r.status_code != 200:
+            print("ERROR API OPTIONS:", r.text)
+            return None
 
-    if "results" not in r:
+        data = r.json()
+
+        if "results" not in data:
+            print("NO RESULTS OPTIONS:", data)
+            return None
+
+        return data["results"]
+
+    except Exception as e:
+        print("ERROR PARSE OPTIONS:", e)
         return None
-
-    df = pd.DataFrame(r["results"]).sort_values("t")
-
-    df["close"] = df["c"]
-    df["volume"] = df["v"]
-
-    return df
 
 
 # -----------------------------
