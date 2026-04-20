@@ -5,6 +5,8 @@ import requests
 from flask import Flask
 
 import engine
+from risk import position_size
+from db import init_db, log_trade
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -22,36 +24,54 @@ def send(msg):
 
 @app.route("/")
 def home():
-    return "BOT ACTIVO 🚀"
+    return "BOT PROFESIONAL ACTIVO 🚀"
 
 
 def loop():
 
-    send("🚀 BOT SPY/QQQ ACTIVO")
+    send("🔥 BOT CON GESTION PROFESIONAL ACTIVO")
+
+    active_trades = 0
+    max_trades = 3
 
     while True:
         try:
             for sym in ["SPY", "QQQ"]:
 
-                sig = engine.signal(sym)
+                if active_trades >= max_trades:
+                    continue
 
-                print("SIG:", sig)
+                sig = engine.signal(sym)
 
                 if sig:
 
+                    contracts = position_size(sig["premium"])
+
                     msg = (
-                        f"🎯 {sig['direction']} {sym}\n"
+                        f"🔥 {sig['direction']} {sym}\n"
                         f"Tipo: {sig['type']}\n"
                         f"Precio: {sig['price']}\n\n"
                         f"Strike: {sig['strike']}\n"
                         f"Prima: {sig['premium']}\n"
-                        f"Delta: {sig['delta']}\n"
-                        f"ROI: {sig['roi']}%\n"
+                        f"Contratos: {contracts}\n\n"
+                        f"SL: -30%\n"
+                        f"TP: +50%\n\n"
                         f"Score: {sig['score']}\n"
                         f"VIX: {sig['vix']}"
                     )
 
                     send(msg)
+
+                    log_trade(
+                        sig["symbol"],
+                        sig["direction"],
+                        sig["price"],
+                        sig["strike"],
+                        sig["premium"],
+                        sig["score"]
+                    )
+
+                    active_trades += 1
 
             time.sleep(300)
 
@@ -61,6 +81,8 @@ def loop():
 
 
 if __name__ == "__main__":
+
+    init_db()
 
     threading.Thread(target=loop).start()
 
