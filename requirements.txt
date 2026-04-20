@@ -3,3 +3,4 @@ requests
 pandas
 ta
 gunicorn
+sqlite3
