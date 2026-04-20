@@ -43,6 +43,7 @@ def loop():
                            f"Score: {sig['score']}/10\n"
                            f"Exp: 1–3 DTE")
                     send(msg)
+                    log_trade("SPY", "CALL", 500, 8)
                     log_trade(sig['symbol'], sig['direction'], sig['price'], sig['score'])
             time.sleep(300)  # cada 5 min
         except Exception as e:
