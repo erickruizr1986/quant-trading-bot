@@ -59,6 +59,8 @@ def signal(symbol):
         if last['ema20'] < last['ema40']: score += 1
         direction = "PUT"
 
+    print(f"{symbol} | score: {score} | price: {last['close']}")
+
     if direction and score >= 6:
         return {
             "symbol": symbol,
