@@ -1,5 +1,9 @@
-import os, threading, time, requests
+import os
+import threading
+import time
+import requests
 from flask import Flask, jsonify
+
 import engine
 from db import init_db, log_trade, fetch_trades
 from metrics import compute_metrics
@@ -12,56 +16,81 @@ engine.API_KEY = API_KEY
 
 app = Flask(__name__)
 
+
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
+
 @app.route("/")
 def home():
     return "QUANT DASHBOARD LIVE 📊"
-    log_trade("SPY", "CALL", 500, 9)
+
 
 @app.route("/metrics")
 def metrics():
     df = fetch_trades()
     return jsonify(compute_metrics(df))
 
+
 @app.route("/trades")
 def trades():
     df = fetch_trades()
-    if df is None: return jsonify([])
+    if df is None:
+        return jsonify([])
     return df.tail(100).to_json(orient="records")
 
+
+# -----------------------------
+# LOOP PRINCIPAL
+# -----------------------------
 def loop():
-    send("📊 QUANT SYSTEM + DASHBOARD ONLINE")
+    send("📊 QUANT SYSTEM + OPCIONES PRO ACTIVO")
 
     print("LOOP CORRIENDO")
 
     while True:
         try:
-            for sym in ["SPY","QQQ"]:
+            for sym in ["SPY", "QQQ"]:
+
                 print("Evaluando:", sym)
-    
+
                 sig = engine.signal(sym)
-                
+
+                print("SIG:", sig)
+
                 if sig:
-                    msg = (f"🎯 {sig['direction']} {sym}\n"
-                           f"Precio: {sig['price']}\n"
-                           f"Score: {sig['score']}/10\n"
-                           f"Exp: 1–3 DTE")
+
+                    opt = sig["option"]
+
+                    msg = (
+                        f"🎯 {sig['direction']} {sym}\n"
+                        f"Precio: {sig['price']}\n\n"
+                        f"📊 OPCIÓN:\n"
+                        f"Strike: {opt['strike']}\n"
+                        f"DTE: {opt['dte']} días\n"
+                        f"Delta: {opt['delta']}\n"
+                        f"Score: {sig['score']}"
+                    )
+
                     send(msg)
-                    log_trade("SPY", "CALL", 500, 8)
-                    log_trade(sig['symbol'], sig['direction'], sig['price'], sig['score'])
-            time.sleep(300)  # cada 5 min
+
+                    log_trade(
+                        sig['symbol'],
+                        sig['direction'],
+                        sig['price'],
+                        sig['score']
+                    )
+
+            time.sleep(300)
+
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
             time.sleep(60)
+
 
 if __name__ == "__main__":
     init_db()
-
-    # 🔥 PRUEBA FORZADA
-    log_trade("TEST", "CALL", 999, 10)
 
     threading.Thread(target=loop).start()
 
