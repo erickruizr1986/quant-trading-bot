@@ -17,17 +17,11 @@ engine.API_KEY = API_KEY
 app = Flask(__name__)
 
 
-# -----------------------------
-# TELEGRAM
-# -----------------------------
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 
-# -----------------------------
-# DASHBOARD
-# -----------------------------
 @app.route("/")
 def home():
     return "QUANT DASHBOARD LIVE 📊"
@@ -47,20 +41,13 @@ def trades():
     return df.tail(100).to_json(orient="records")
 
 
-# -----------------------------
-# LOOP PRINCIPAL
-# -----------------------------
 def loop():
 
-    send("🚀 BOT CUANT + OPCIONES PRO ACTIVO")
-
-    print("LOOP CORRIENDO")
+    send("🚀 BOT QUANT OPCIONES ACTIVADO")
 
     while True:
         try:
             for sym in ["SPY", "QQQ"]:
-
-                print("Evaluando:", sym)
 
                 sig = engine.signal(sym)
 
@@ -68,15 +55,15 @@ def loop():
 
                 if sig:
 
-                    opt = sig["option"]
-
                     msg = (
                         f"🎯 {sig['direction']} {sym}\n"
                         f"Precio: {sig['price']}\n\n"
                         f"📊 OPCIÓN:\n"
-                        f"Strike: {opt['strike']}\n"
-                        f"DTE: {opt['dte']} días\n"
-                        f"Delta: {opt['delta']}\n"
+                        f"Strike: {sig['strike']}\n"
+                        f"Prima: {sig['premium']}\n"
+                        f"Delta: {sig['delta']}\n\n"
+                        f"📈 Proyección:\n"
+                        f"ROI estimado: {sig['roi']}%\n"
                         f"Score: {sig['score']}"
                     )
 
@@ -96,9 +83,6 @@ def loop():
             time.sleep(60)
 
 
-# -----------------------------
-# START
-# -----------------------------
 if __name__ == "__main__":
     init_db()
 
