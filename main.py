@@ -34,10 +34,16 @@ def trades():
 
 def loop():
     send("📊 QUANT SYSTEM + DASHBOARD ONLINE")
+
+    print("LOOP CORRIENDO")
+
     while True:
         try:
             for sym in ["SPY","QQQ"]:
+                print("Evaluando:", sym)
+    
                 sig = engine.signal(sym)
+                
                 if sig:
                     msg = (f"🎯 {sig['direction']} {sym}\n"
                            f"Precio: {sig['price']}\n"
