@@ -10,13 +10,26 @@ API_KEY = None  # se setea desde main.py
 # DATA
 # -----------------------------
 def get_data(symbol, tf):
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{tf}/2023-01-01/2026-01-01?apiKey={API_KEY}"
+
+    if tf == "hour":
+        multiplier = "1"
+        timespan = "hour"
+    elif tf == "day":
+        multiplier = "1"
+        timespan = "day"
+
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
+
     r = requests.get(url).json()
 
     if 'results' not in r:
         return None
 
     df = pd.DataFrame(r['results'])
+
+    # 🔥 IMPORTANTE: ordenar correctamente
+    df = df.sort_values(by='t')
+
     df['close'] = df['c']
     df['volume'] = df['v']
 
