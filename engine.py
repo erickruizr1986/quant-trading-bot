@@ -1,10 +1,16 @@
 import requests
 import pandas as pd
-import math
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 
 API_KEY = None
+
+# -----------------------------
+# PARÁMETROS (OPTIMIZABLES)
+# -----------------------------
+BREAKOUT_WINDOW = 15
+THRESHOLD = 3
+VOL_MULT = 1.5
 
 
 # -----------------------------
@@ -14,31 +20,19 @@ def get_data(symbol, tf):
 
     timespan = "hour" if tf == "hour" else "day"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=200&apiKey={API_KEY}"
 
-    try:
-        r = requests.get(url)
+    r = requests.get(url).json()
 
-        if r.status_code != 200:
-            print("ERROR DATA API:", r.text)
-            return None
-
-        data = r.json()
-
-        if "results" not in data:
-            print("NO DATA:", data)
-            return None
-
-        df = pd.DataFrame(data["results"]).sort_values("t")
-
-        df["close"] = df["c"]
-        df["volume"] = df["v"]
-
-        return df
-
-    except Exception as e:
-        print("ERROR GET DATA:", e)
+    if "results" not in r:
         return None
+
+    df = pd.DataFrame(r["results"]).sort_values("t")
+
+    df["close"] = df["c"]
+    df["volume"] = df["v"]
+
+    return df
 
 
 # -----------------------------
@@ -52,125 +46,44 @@ def add_ind(df):
 
 
 # -----------------------------
-# OPTIONS CHAIN
+# VOLATILIDAD
 # -----------------------------
-def get_option_chain(symbol):
-
-    url = f"https://api.polygon.io/v2/snapshot/options/{symbol}?apiKey={API_KEY}"
-
-    try:
-        r = requests.get(url)
-
-        if r.status_code != 200:
-            print("ERROR API OPTIONS:", r.text)
-            return None
-
-        data = r.json()
-
-        if "results" not in data:
-            print("NO OPTIONS:", data)
-            return None
-
-        return data["results"]
-
-    except Exception as e:
-        print("ERROR OPTIONS:", e)
-        return None
+def calc_volatility(df):
+    return df["close"].pct_change().rolling(20).std().iloc[-1]
 
 
 # -----------------------------
-# SELECCIÓN DE OPCIÓN
+# OPCIÓN SIMULADA PRO
 # -----------------------------
-def pick_best_option(chain, price, direction):
+def simulate_option(price, direction, vol):
 
-    best = None
-    best_score = 0
+    strike = round(price)
 
-    for opt in chain:
-        try:
-            strike = opt["details"]["strike_price"]
-            delta = opt["greeks"]["delta"]
-            premium = opt["last_trade"]["price"]
-            volume = opt["day"]["volume"]
-
-            if premium < 0.3 or volume < 50:
-                continue
-
-            score = 0
-
-            if direction == "CALL":
-                if 0.3 < delta < 0.6:
-                    score += 2
-                if strike <= price:
-                    score += 1
-
-            if direction == "PUT":
-                if -0.6 < delta < -0.3:
-                    score += 2
-                if strike >= price:
-                    score += 1
-
-            if score > best_score:
-                best_score = score
-                best = opt
-
-        except:
-            continue
-
-    return best
-
-
-# -----------------------------
-# NORMAL CDF
-# -----------------------------
-def norm_cdf(x):
-    return (1 + math.erf(x / math.sqrt(2))) / 2
-
-
-# -----------------------------
-# BLACK-SCHOLES
-# -----------------------------
-def black_scholes(S, K, T, r, sigma, call=True):
-
-    if T <= 0:
-        return 0
-
-    d1 = (math.log(S / K) + (r + sigma**2 / 2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-
-    if call:
-        return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+    if direction == "CALL":
+        strike -= 1
+        moneyness = (price - strike) / price
     else:
-        return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+        strike += 1
+        moneyness = (strike - price) / price
 
+    delta = 0.3 + (moneyness * 5)
+    delta = max(0.3, min(delta, 0.6))
 
-# -----------------------------
-# ESTIMACIÓN
-# -----------------------------
-def estimate(price, option, direction):
+    premium = max(0.8, price * vol * VOL_MULT)
 
-    strike = option["details"]["strike_price"]
-    premium = option["last_trade"]["price"]
-    delta = abs(option["greeks"]["delta"])
+    expected_move = price * (vol * 1.5)
 
-    expected_move = price * 0.003
+    gain = expected_move * delta
 
-    future_price = price + expected_move if direction == "CALL" else price - expected_move
+    future_price = premium + gain
 
-    sigma = 0.2
-    T = 2 / 365
-    r = 0.01
-
-    theoretical = black_scholes(
-        future_price, strike, T, r, sigma, call=(direction == "CALL")
-    )
-
-    roi = (theoretical - premium) / premium
+    roi = (future_price - premium) / premium * 100
 
     return {
+        "strike": strike,
         "premium": round(premium, 2),
-        "roi": round(roi * 100, 2),
         "delta": round(delta, 2),
+        "roi": round(roi, 2)
     }
 
 
@@ -198,9 +111,9 @@ def signal(symbol):
     else:
         score -= 2
 
-    # breakout
-    high = h1["close"].iloc[-15:].max()
-    low = h1["close"].iloc[-15:].min()
+    # breakout dinámico
+    high = h1["close"].iloc[-BREAKOUT_WINDOW:].max()
+    low = h1["close"].iloc[-BREAKOUT_WINDOW:].min()
 
     if last["close"] > high:
         score += 2
@@ -215,37 +128,22 @@ def signal(symbol):
 
     print(f"{symbol} SCORE: {score}")
 
+    if abs(score) < THRESHOLD:
+        return None
+
     direction = "CALL" if score > 0 else "PUT"
 
-    # clasificación
-    if abs(score) >= 3:
-        signal_type = "A+"
-    elif abs(score) == 2:
-        signal_type = "B"
-    else:
-        return None
+    vol = calc_volatility(h1)
 
-    chain = get_option_chain(symbol)
-
-    if not chain:
-        print("FALLBACK SIN OPTIONS")
-        return None
-
-    option = pick_best_option(chain, last["close"], direction)
-
-    if not option:
-        return None
-
-    est = estimate(last["close"], option, direction)
+    option = simulate_option(last["close"], direction, vol)
 
     return {
         "symbol": symbol,
         "direction": direction,
         "price": round(last["close"], 2),
         "score": score,
-        "type": signal_type,
-        "strike": option["details"]["strike_price"],
-        "premium": est["premium"],
-        "roi": est["roi"],
-        "delta": est["delta"],
+        "strike": option["strike"],
+        "premium": option["premium"],
+        "roi": option["roi"],
+        "delta": option["delta"],
     }
