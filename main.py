@@ -53,5 +53,11 @@ def loop():
 
 if __name__ == "__main__":
     init_db()
+
+    # 🔥 PRUEBA FORZADA
+    log_trade("TEST", "CALL", 999, 10)
+
     threading.Thread(target=loop).start()
-    app.run(host="0.0.0.0", port=8080)
+
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
