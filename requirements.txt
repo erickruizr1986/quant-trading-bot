@@ -3,4 +3,4 @@ requests
 pandas
 ta
 gunicorn
-sqlite3
+pytz
