@@ -19,6 +19,7 @@ def send(msg):
 @app.route("/")
 def home():
     return "QUANT DASHBOARD LIVE 📊"
+    log_trade("SPY", "CALL", 500, 9)
 
 @app.route("/metrics")
 def metrics():
