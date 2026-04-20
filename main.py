@@ -2,11 +2,9 @@ import os
 import threading
 import time
 import requests
-from flask import Flask, jsonify
+from flask import Flask
 
 import engine
-from db import init_db, log_trade, fetch_trades
-from metrics import compute_metrics
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -24,26 +22,12 @@ def send(msg):
 
 @app.route("/")
 def home():
-    return "QUANT DASHBOARD LIVE 📊"
-
-
-@app.route("/metrics")
-def metrics():
-    df = fetch_trades()
-    return jsonify(compute_metrics(df))
-
-
-@app.route("/trades")
-def trades():
-    df = fetch_trades()
-    if df is None:
-        return jsonify([])
-    return df.tail(100).to_json(orient="records")
+    return "BOT ACTIVO 🚀"
 
 
 def loop():
 
-    send("🚀 BOT QUANT OPCIONES PRO ACTIVO")
+    send("🚀 BOT SPY/QQQ ACTIVO")
 
     while True:
         try:
@@ -59,23 +43,15 @@ def loop():
                         f"🎯 {sig['direction']} {sym}\n"
                         f"Tipo: {sig['type']}\n"
                         f"Precio: {sig['price']}\n\n"
-                        f"📊 OPCIÓN:\n"
                         f"Strike: {sig['strike']}\n"
                         f"Prima: {sig['premium']}\n"
-                        f"Delta: {sig['delta']}\n\n"
-                        f"📈 Proyección:\n"
-                        f"ROI estimado: {sig['roi']}%\n"
-                        f"Score: {sig['score']}"
+                        f"Delta: {sig['delta']}\n"
+                        f"ROI: {sig['roi']}%\n"
+                        f"Score: {sig['score']}\n"
+                        f"VIX: {sig['vix']}"
                     )
 
                     send(msg)
-
-                    log_trade(
-                        sig['symbol'],
-                        sig['direction'],
-                        sig['price'],
-                        sig['score']
-                    )
 
             time.sleep(300)
 
@@ -85,7 +61,6 @@ def loop():
 
 
 if __name__ == "__main__":
-    init_db()
 
     threading.Thread(target=loop).start()
 
