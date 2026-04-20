@@ -35,7 +35,6 @@ def get_data(symbol, tf):
 def add_ind(df):
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
-    df["ema100"] = EMAIndicator(df["close"], 100).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
     return df
 
@@ -129,7 +128,7 @@ def estimate(price, option, direction):
     premium = option["last_trade"]["price"]
     delta = abs(option["greeks"]["delta"])
 
-    expected_move = price * 0.003  # 0.3%
+    expected_move = price * 0.003
 
     future_price = price + expected_move if direction == "CALL" else price - expected_move
 
@@ -150,7 +149,6 @@ def estimate(price, option, direction):
 
     return {
         "premium": round(premium, 2),
-        "theoretical": round(theoretical, 2),
         "roi": round(roi * 100, 2),
         "delta": round(delta, 2),
     }
@@ -199,27 +197,34 @@ def signal(symbol):
 
     direction = "CALL" if score > 0 else "PUT"
 
+    # -----------------------------
+    # CLASIFICACIÓN DE SEÑAL
+    # -----------------------------
     if abs(score) >= 3:
+        signal_type = "A+"
+    elif abs(score) == 2:
+        signal_type = "B"
+    else:
+        return None
 
-        chain = get_option_chain(symbol)
-        if not chain:
-            return None
+    chain = get_option_chain(symbol)
+    if not chain:
+        return None
 
-        option = pick_best_option(chain, last["close"], direction)
-        if not option:
-            return None
+    option = pick_best_option(chain, last["close"], direction)
+    if not option:
+        return None
 
-        est = estimate(last["close"], option, direction)
+    est = estimate(last["close"], option, direction)
 
-        return {
-            "symbol": symbol,
-            "direction": direction,
-            "price": round(last["close"], 2),
-            "score": score,
-            "strike": option["details"]["strike_price"],
-            "premium": est["premium"],
-            "roi": est["roi"],
-            "delta": est["delta"],
-        }
-
-    return None
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "price": round(last["close"], 2),
+        "score": score,
+        "type": signal_type,
+        "strike": option["details"]["strike_price"],
+        "premium": est["premium"],
+        "roi": est["roi"],
+        "delta": est["delta"],
+    }
