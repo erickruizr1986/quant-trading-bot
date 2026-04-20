@@ -132,7 +132,7 @@ def signal(symbol):
     # -----------------------------
     # FILTRO FINAL
     # -----------------------------
-    if abs(score) >= 3:
+    if abs(score) >= 4:
         return {
             "symbol": symbol,
             "direction": direction,
