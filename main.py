@@ -17,11 +17,17 @@ engine.API_KEY = API_KEY
 app = Flask(__name__)
 
 
+# -----------------------------
+# TELEGRAM
+# -----------------------------
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 
+# -----------------------------
+# DASHBOARD
+# -----------------------------
 @app.route("/")
 def home():
     return "QUANT DASHBOARD LIVE 📊"
@@ -45,7 +51,8 @@ def trades():
 # LOOP PRINCIPAL
 # -----------------------------
 def loop():
-    send("📊 QUANT SYSTEM + OPCIONES PRO ACTIVO")
+
+    send("🚀 BOT CUANT + OPCIONES PRO ACTIVO")
 
     print("LOOP CORRIENDO")
 
@@ -89,6 +96,9 @@ def loop():
             time.sleep(60)
 
 
+# -----------------------------
+# START
+# -----------------------------
 if __name__ == "__main__":
     init_db()
 
