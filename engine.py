@@ -7,7 +7,7 @@ API_KEY = None
 
 
 # -----------------------------
-# DATA (ACTUALIZADA)
+# DATA ACTUAL (ÚLTIMAS VELAS)
 # -----------------------------
 def get_data(symbol, tf):
 
@@ -26,6 +26,8 @@ def get_data(symbol, tf):
         return None
 
     df = pd.DataFrame(r['results'])
+
+    # ordenar correctamente
     df = df.sort_values(by='t')
 
     df['close'] = df['c']
@@ -91,11 +93,14 @@ def signal(symbol):
     h1 = add_ind(h1)
     d1 = add_ind(d1)
 
-    last = h1.iloc[-1]
+    # 🔥 usar vela cerrada (más estable)
+    last = h1.iloc[-2]
 
     score = 0
 
-    # Tendencia diaria
+    # -----------------------------
+    # TENDENCIA DIARIA
+    # -----------------------------
     daily_up = (
         d1['ema20'].iloc[-1] > d1['ema40'].iloc[-1] >
         d1['ema100'].iloc[-1]
@@ -106,7 +111,9 @@ def signal(symbol):
     else:
         score -= 2
 
-    # Breakout
+    # -----------------------------
+    # BREAKOUT
+    # -----------------------------
     high = h1['close'].iloc[-15:].max()
     low = h1['close'].iloc[-15:].min()
 
@@ -115,29 +122,46 @@ def signal(symbol):
     if last['close'] < low:
         score -= 2
 
-    # Volumen
-    vol_mean = h1['volume'].rolling(20).mean().iloc[-1]
+    # -----------------------------
+    # VOLUMEN
+    # -----------------------------
+    vol_mean = h1['volume'].rolling(20).mean().iloc[-2]
+
     if last['volume'] > vol_mean:
         score += 1
 
+    # -----------------------------
     # RSI
+    # -----------------------------
     if 50 <= last['rsi'] <= 70:
         score += 1
     if 30 <= last['rsi'] <= 50:
         score -= 1
 
+    # -----------------------------
     # VIX
+    # -----------------------------
     vix = vix_trend()
+
     if vix < 1:
         score += 1
     if vix > 1:
         score -= 1
 
-    print(f"{symbol} | score: {score} | price: {round(last['close'],2)}")
+    # -----------------------------
+    # DEBUG
+    # -----------------------------
+    print(f"{symbol} | FINAL SCORE: {score} | price: {round(last['close'],2)}")
 
+    # -----------------------------
+    # DIRECCIÓN
+    # -----------------------------
     direction = "CALL" if score > 0 else "PUT"
 
-    if abs(score) >= 4:
+    # -----------------------------
+    # FILTRO FINAL (BALANCEADO)
+    # -----------------------------
+    if abs(score) >= 3:
 
         option = select_option(last['close'], direction)
 
