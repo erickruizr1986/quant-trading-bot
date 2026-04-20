@@ -10,27 +10,34 @@ API_KEY = None
 # -----------------------------
 # DATA
 # -----------------------------
-def get_option_chain(symbol):
+def get_data(symbol, tf):
 
-    url = f"https://api.polygon.io/v2/snapshot/options/{symbol}?apiKey={API_KEY}"
+    timespan = "hour" if tf == "hour" else "day"
+
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=100&apiKey={API_KEY}"
 
     try:
         r = requests.get(url)
 
         if r.status_code != 200:
-            print("ERROR API OPTIONS:", r.text)
+            print("ERROR DATA API:", r.text)
             return None
 
         data = r.json()
 
         if "results" not in data:
-            print("NO RESULTS OPTIONS:", data)
+            print("NO DATA:", data)
             return None
 
-        return data["results"]
+        df = pd.DataFrame(data["results"]).sort_values("t")
+
+        df["close"] = df["c"]
+        df["volume"] = df["v"]
+
+        return df
 
     except Exception as e:
-        print("ERROR PARSE OPTIONS:", e)
+        print("ERROR GET DATA:", e)
         return None
 
 
@@ -50,12 +57,25 @@ def add_ind(df):
 def get_option_chain(symbol):
 
     url = f"https://api.polygon.io/v2/snapshot/options/{symbol}?apiKey={API_KEY}"
-    r = requests.get(url).json()
 
-    if "results" not in r:
+    try:
+        r = requests.get(url)
+
+        if r.status_code != 200:
+            print("ERROR API OPTIONS:", r.text)
+            return None
+
+        data = r.json()
+
+        if "results" not in data:
+            print("NO OPTIONS:", data)
+            return None
+
+        return data["results"]
+
+    except Exception as e:
+        print("ERROR OPTIONS:", e)
         return None
-
-    return r["results"]
 
 
 # -----------------------------
@@ -142,12 +162,7 @@ def estimate(price, option, direction):
     r = 0.01
 
     theoretical = black_scholes(
-        future_price,
-        strike,
-        T,
-        r,
-        sigma,
-        call=(direction == "CALL")
+        future_price, strike, T, r, sigma, call=(direction == "CALL")
     )
 
     roi = (theoretical - premium) / premium
@@ -202,9 +217,7 @@ def signal(symbol):
 
     direction = "CALL" if score > 0 else "PUT"
 
-    # -----------------------------
-    # CLASIFICACIÓN DE SEÑAL
-    # -----------------------------
+    # clasificación
     if abs(score) >= 3:
         signal_type = "A+"
     elif abs(score) == 2:
@@ -213,10 +226,13 @@ def signal(symbol):
         return None
 
     chain = get_option_chain(symbol)
+
     if not chain:
+        print("FALLBACK SIN OPTIONS")
         return None
 
     option = pick_best_option(chain, last["close"], direction)
+
     if not option:
         return None
 
