@@ -43,7 +43,7 @@ def trades():
 
 def loop():
 
-    send("🚀 BOT QUANT OPCIONES ACTIVADO")
+    send("🚀 BOT QUANT OPCIONES PRO ACTIVO")
 
     while True:
         try:
@@ -57,6 +57,7 @@ def loop():
 
                     msg = (
                         f"🎯 {sig['direction']} {sym}\n"
+                        f"Tipo: {sig['type']}\n"
                         f"Precio: {sig['price']}\n\n"
                         f"📊 OPCIÓN:\n"
                         f"Strike: {sig['strike']}\n"
