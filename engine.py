@@ -3,11 +3,11 @@ import pandas as pd
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 
-API_KEY = None  # se setea desde main.py
+API_KEY = None
 
 
 # -----------------------------
-# DATA
+# DATA (ACTUALIZADA)
 # -----------------------------
 def get_data(symbol, tf):
 
@@ -26,8 +26,6 @@ def get_data(symbol, tf):
         return None
 
     df = pd.DataFrame(r['results'])
-
-    # 🔥 IMPORTANTE: ordenar correctamente
     df = df.sort_values(by='t')
 
     df['close'] = df['c']
@@ -45,7 +43,6 @@ def add_ind(df):
     df['ema100'] = EMAIndicator(df['close'], 100).ema_indicator()
     df['ema200'] = EMAIndicator(df['close'], 200).ema_indicator()
     df['rsi'] = RSIIndicator(df['close'], 14).rsi()
-
     return df
 
 
@@ -59,6 +56,25 @@ def vix_trend():
         return 0
 
     return v['close'].iloc[-1] - v['close'].iloc[-5]
+
+
+# -----------------------------
+# SELECCIÓN DE OPCIONES PRO
+# -----------------------------
+def select_option(price, direction):
+
+    strike = round(price)
+
+    if direction == "CALL":
+        strike -= 1
+    else:
+        strike += 1
+
+    return {
+        "strike": strike,
+        "dte": "1-3",
+        "delta": "0.35-0.50"
+    }
 
 
 # -----------------------------
@@ -76,13 +92,10 @@ def signal(symbol):
     d1 = add_ind(d1)
 
     last = h1.iloc[-1]
-    prev = h1.iloc[-2]
 
     score = 0
 
-    # -----------------------------
-    # TENDENCIA DIARIA
-    # -----------------------------
+    # Tendencia diaria
     daily_up = (
         d1['ema20'].iloc[-1] > d1['ema40'].iloc[-1] >
         d1['ema100'].iloc[-1]
@@ -93,64 +106,47 @@ def signal(symbol):
     else:
         score -= 2
 
-    # -----------------------------
-    # BREAKOUT
-    # -----------------------------
+    # Breakout
     high = h1['close'].iloc[-15:].max()
     low = h1['close'].iloc[-15:].min()
 
     if last['close'] > high:
         score += 2
-
     if last['close'] < low:
         score -= 2
 
-    # -----------------------------
-    # VOLUMEN
-    # -----------------------------
+    # Volumen
     vol_mean = h1['volume'].rolling(20).mean().iloc[-1]
-
     if last['volume'] > vol_mean:
         score += 1
 
-    # -----------------------------
-    # RSI (momentum)
-    # -----------------------------
+    # RSI
     if 50 <= last['rsi'] <= 70:
         score += 1
-
     if 30 <= last['rsi'] <= 50:
         score -= 1
 
-    # -----------------------------
     # VIX
-    # -----------------------------
     vix = vix_trend()
-
     if vix < 1:
         score += 1
     if vix > 1:
         score -= 1
 
-    # -----------------------------
-    # DEBUG (VER EN LOGS)
-    # -----------------------------
     print(f"{symbol} | score: {score} | price: {round(last['close'],2)}")
 
-    # -----------------------------
-    # DIRECCIÓN
-    # -----------------------------
     direction = "CALL" if score > 0 else "PUT"
 
-    # -----------------------------
-    # FILTRO FINAL
-    # -----------------------------
     if abs(score) >= 4:
+
+        option = select_option(last['close'], direction)
+
         return {
             "symbol": symbol,
             "direction": direction,
             "price": float(round(last['close'], 2)),
-            "score": float(score)
+            "score": float(score),
+            "option": option
         }
 
     return None
