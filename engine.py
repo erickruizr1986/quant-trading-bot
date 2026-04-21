@@ -13,7 +13,7 @@ def log(msg):
         print(msg)
 
 # -----------------------------
-# SAFE FLOAT
+# SAFE
 # -----------------------------
 def safe(x):
     try:
@@ -43,6 +43,7 @@ def get_data(symbol, interval, period):
         df = df.reset_index()
 
         df["close"] = df["Close"]
+        df["open"] = df["Open"]
         df["high"] = df["High"]
         df["low"] = df["Low"]
         df["volume"] = df["Volume"]
@@ -61,142 +62,169 @@ def add_vwap(df):
     return df
 
 # -----------------------------
-# HORARIO
+# HORARIO PRO (ALTO VOLUMEN)
 # -----------------------------
 def valid_session():
     ny = pytz.timezone("America/New_York")
     now = datetime.now(ny)
-    return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
+
+    h = now.hour
+    m = now.minute
+
+    # apertura
+    if (h == 9 and m >= 30) or (h == 10):
+        return True
+
+    # power hour
+    if h >= 14 and h < 16:
+        return True
+
+    return False
 
 # -----------------------------
-# SIGNAL FINAL
+# ANALISIS DE VELAS
+# -----------------------------
+def candle_strength(candle):
+
+    o = safe(candle["open"])
+    c = safe(candle["close"])
+    h = safe(candle["high"])
+    l = safe(candle["low"])
+
+    if None in [o, c, h, l]:
+        return None
+
+    body = abs(c - o)
+    range_total = h - l
+
+    if range_total == 0:
+        return 0
+
+    strength = body / range_total
+
+    return strength, c > o  # fuerza + dirección
+
+# -----------------------------
+# SIGNAL
 # -----------------------------
 def signal(symbol):
 
     log(f"\n🔍 ANALIZANDO {symbol}")
 
     if not valid_session():
+        log("⏰ FUERA DE HORARIO PRO")
         return None
 
     # -----------------------------
-    # BIAS DAILY
+    # BIAS BASE
     # -----------------------------
     d1 = get_data(symbol, "1d", "2mo")
     bias = None
 
     if d1 is not None:
-        try:
-            last_close = safe(d1.iloc[-1]["close"])
-            avg_close = safe(d1["close"].tail(20).mean())
+        last_close = safe(d1.iloc[-1]["close"])
+        avg_close = safe(d1["close"].tail(20).mean())
 
-            if last_close is not None and avg_close is not None:
-                bias = "CALL" if last_close > avg_close else "PUT"
-                log(f"📊 BIAS DAILY: {bias}")
-        except:
-            pass
+        if last_close and avg_close:
+            bias = "CALL" if last_close > avg_close else "PUT"
+            log(f"📊 BIAS DAILY: {bias}")
 
-    # -----------------------------
-    # FALLBACK INTRADÍA
-    # -----------------------------
+    # fallback
     if bias is None:
         log("⚠️ FALLBACK INTRADÍA")
 
-        h1_temp = get_data(symbol, "1h", "5d")
-
-        if h1_temp is None:
-            log("❌ SIN DATA TOTAL")
+        temp = get_data(symbol, "1h", "5d")
+        if temp is None:
             return None
 
-        try:
-            last = safe(h1_temp.iloc[-2]["close"])
-            avg = safe(h1_temp["close"].tail(20).mean())
+        last = safe(temp.iloc[-2]["close"])
+        prev = safe(temp.iloc[-3]["close"])
 
-            if last is None or avg is None:
-                log("⚠️ DATA INCOMPLETA → MOMENTUM SIMPLE")
-
-                prev = safe(h1_temp.iloc[-3]["close"])
-
-                if prev is None or last is None:
-                    return None
-
-                bias = "CALL" if last > prev else "PUT"
-            else:
-                bias = "CALL" if last > avg else "PUT"
-
-        except:
+        if last and prev:
+            bias = "CALL" if last > prev else "PUT"
+        else:
             return None
 
     # -----------------------------
-    # INTRADÍA PRINCIPAL
+    # INTRADÍA
     # -----------------------------
-    h1 = get_data(symbol, "1h", "10d")
+    df = get_data(symbol, "1h", "10d")
 
-    if h1 is None:
-        log("❌ SIN DATA INTRADIA")
+    if df is None:
         return None
 
-    h1["ema20"] = EMAIndicator(h1["close"], 20).ema_indicator()
-    h1["rsi"] = RSIIndicator(h1["close"], 14).rsi()
-    h1 = add_vwap(h1)
+    df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
+    df["rsi"] = RSIIndicator(df["close"], 14).rsi()
+    df = add_vwap(df)
 
-    try:
-        last = h1.iloc[-2]
-        prev = h1.iloc[-3]
-    except:
-        return None
+    last = df.iloc[-2]
+    prev = df.iloc[-3]
 
     close = safe(last["close"])
     ema20 = safe(last["ema20"])
-    prev_close = safe(prev["close"])
     vwap = safe(last["vwap"])
     volume = safe(last["volume"])
-    vol_avg = safe(h1["volume"].rolling(20).mean().iloc[-1])
+    vol_avg = safe(df["volume"].rolling(20).mean().iloc[-1])
     rsi = safe(last["rsi"])
 
-    if None in [close, ema20, prev_close, vwap, volume, vol_avg, rsi]:
-        log("❌ DATA INVALIDA")
+    if None in [close, ema20, vwap, volume, vol_avg, rsi]:
         return None
 
     score = 0
     direction = bias
 
-    # EMA20
+    # -----------------------------
+    # 🔥 ANALISIS DE VELA
+    # -----------------------------
+    strength_data = candle_strength(last)
+
+    if strength_data:
+        strength, bullish = strength_data
+
+        if bullish:
+            score += 1
+            log("🟢 VELA ALCISTA")
+        else:
+            score -= 1
+            log("🔴 VELA BAJISTA")
+
+        if strength > 0.6:
+            score += 1 if bullish else -1
+            log("🔥 VELA FUERTE")
+
+    # -----------------------------
+    # EMA20 (flexible)
+    # -----------------------------
     if direction == "CALL":
         if close > ema20:
             score += 1
         else:
-            return None
+            log("⚠️ EMA20 NO IDEAL")
     else:
         if close < ema20:
             score -= 1
         else:
-            return None
+            log("⚠️ EMA20 NO IDEAL")
 
-    # Momentum
-    if direction == "CALL":
-        if close > prev_close:
-            score += 1
-        else:
-            return None
-    else:
-        if close < prev_close:
-            score -= 1
-        else:
-            return None
-
+    # -----------------------------
     # VWAP
+    # -----------------------------
     if direction == "CALL" and close > vwap:
         score += 1
     elif direction == "PUT" and close < vwap:
         score -= 1
 
-    # Volumen
-    if volume > vol_avg * 0.8:
+    # -----------------------------
+    # VOLUMEN (más permisivo)
+    # -----------------------------
+    if volume > vol_avg * 0.6:
         score += 1 if direction == "CALL" else -1
     else:
-        return None
+        log("⚠️ VOLUMEN BAJO")
 
+    # -----------------------------
     # RSI
+    # -----------------------------
     if direction == "CALL" and rsi > 50:
         score += 1
     elif direction == "PUT" and rsi < 50:
@@ -204,22 +232,20 @@ def signal(symbol):
 
     log(f"🎯 SCORE: {score}")
 
-    # -----------------------------
-    # FILTRO DINÁMICO
-    # -----------------------------
     if abs(score) < 1:
-        log("❌ SIN EDGE")
         return None
 
     if abs(score) >= 3:
-        strength = "FUERTE"
-        log("🔥 SEÑAL FUERTE")
+        strength_label = "FUERTE"
     elif abs(score) == 2:
-        strength = "MEDIA"
-        log("⚠️ SEÑAL MEDIA")
+        strength_label = "MEDIA"
     else:
-        strength = "DEBIL"
-        log("⚡ SEÑAL DEBIL (SCALP)")
+        strength_label = "DEBIL"
+
+    # -----------------------------
+    # PROYECCION (CLAVE)
+    # -----------------------------
+    prediction = "CALL" if score > 0 else "PUT"
 
     # -----------------------------
     # STRIKE + EXPIRY
@@ -240,10 +266,10 @@ def signal(symbol):
 
     return {
         "symbol": symbol,
-        "direction": direction,
+        "direction": prediction,
         "price": round(close, 2),
         "score": score,
-        "strength": strength,
+        "strength": strength_label,
         "strike": strike,
         "expiry": expiry,
         "premium": 1.2
