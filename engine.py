@@ -1,3 +1,80 @@
+import yfinance as yf
+import pandas as pd
+from ta.trend import EMAIndicator
+from ta.momentum import RSIIndicator
+from datetime import datetime
+import pytz
+import math
+
+# -----------------------------
+# DEBUG / LOG
+# -----------------------------
+DEBUG = True
+
+def log(msg):
+    if DEBUG:
+        print(msg)
+
+# -----------------------------
+# DATA
+# -----------------------------
+def get_data(symbol, interval, period):
+
+    try:
+        df = yf.download(
+            symbol,
+            period=period,
+            interval=interval,
+            progress=False,
+            threads=False
+        )
+
+        if df is None or len(df) < 30:
+            return None
+
+        df = df.reset_index()
+
+        df["close"] = df["Close"]
+        df["high"] = df["High"]
+        df["low"] = df["Low"]
+        df["volume"] = df["Volume"]
+
+        return df
+
+    except Exception as e:
+        log(f"❌ ERROR DATA: {e}")
+        return None
+
+# -----------------------------
+# VWAP
+# -----------------------------
+def add_vwap(df):
+    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
+    return df
+
+# -----------------------------
+# SAFE FLOAT
+# -----------------------------
+def safe(x):
+    try:
+        v = float(x)
+        if math.isnan(v):
+            return None
+        return v
+    except:
+        return None
+
+# -----------------------------
+# HORARIO
+# -----------------------------
+def valid_session():
+    ny = pytz.timezone("America/New_York")
+    now = datetime.now(ny)
+    return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
+
+# -----------------------------
+# SIGNAL FINAL
+# -----------------------------
 def signal(symbol):
 
     log(f"\n🔍 ANALIZANDO {symbol}")
@@ -6,7 +83,7 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # BIAS (fallback incluido)
+    # BIAS DAILY (fallback)
     # -----------------------------
     d1 = get_data(symbol, "1d", "2mo")
     bias = None
@@ -18,10 +95,14 @@ def signal(symbol):
 
             if last_close and avg_close:
                 bias = "CALL" if last_close > avg_close else "PUT"
+                log(f"📊 BIAS DAILY: {bias}")
         except:
             pass
 
+    # fallback intradía
     if bias is None:
+        log("⚠️ FALLBACK INTRADÍA")
+
         h1_temp = get_data(symbol, "1h", "5d")
         if h1_temp is None:
             return None
@@ -43,8 +124,11 @@ def signal(symbol):
     h1["rsi"] = RSIIndicator(h1["close"], 14).rsi()
     h1 = add_vwap(h1)
 
-    last = h1.iloc[-2]
-    prev = h1.iloc[-3]
+    try:
+        last = h1.iloc[-2]
+        prev = h1.iloc[-3]
+    except:
+        return None
 
     close = safe(last["close"])
     ema20 = safe(last["ema20"])
@@ -55,6 +139,7 @@ def signal(symbol):
     rsi = safe(last["rsi"])
 
     if None in [close, ema20, prev_close, vwap, volume, vol_avg, rsi]:
+        log("❌ DATA INVALIDA")
         return None
 
     score = 0
@@ -94,24 +179,18 @@ def signal(symbol):
     elif direction == "PUT" and rsi < 50:
         score -= 1
 
+    log(f"🎯 SCORE: {score}")
+
     if abs(score) < 2:
         return None
 
     strength = "FUERTE" if abs(score) >= 3 else "MEDIA"
 
     # -----------------------------
-    # 🔥 STRIKE PROFESIONAL
+    # STRIKE + EXPIRY
     # -----------------------------
     strike = round(close)
 
-    if direction == "CALL":
-        strike = strike  # ATM
-    else:
-        strike = strike  # ATM
-
-    # -----------------------------
-    # 🔥 EXPIRACIÓN INTELIGENTE
-    # -----------------------------
     ny = pytz.timezone("America/New_York")
     now = datetime.now(ny)
 
@@ -122,7 +201,6 @@ def signal(symbol):
     else:
         expiry = "1-2DTE"
 
-    log(f"🎯 SCORE: {score}")
     log("🚀 SIGNAL OK")
 
     return {
