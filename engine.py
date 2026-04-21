@@ -6,9 +6,6 @@ from datetime import datetime
 import pytz
 import math
 
-# -----------------------------
-# DEBUG / LOG
-# -----------------------------
 DEBUG = True
 
 def log(msg):
@@ -16,10 +13,21 @@ def log(msg):
         print(msg)
 
 # -----------------------------
+# SAFE FLOAT
+# -----------------------------
+def safe(x):
+    try:
+        v = float(x)
+        if math.isnan(v):
+            return None
+        return v
+    except:
+        return None
+
+# -----------------------------
 # DATA
 # -----------------------------
 def get_data(symbol, interval, period):
-
     try:
         df = yf.download(
             symbol,
@@ -53,18 +61,6 @@ def add_vwap(df):
     return df
 
 # -----------------------------
-# SAFE FLOAT
-# -----------------------------
-def safe(x):
-    try:
-        v = float(x)
-        if math.isnan(v):
-            return None
-        return v
-    except:
-        return None
-
-# -----------------------------
 # HORARIO
 # -----------------------------
 def valid_session():
@@ -73,7 +69,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# SIGNAL FINAL
+# SIGNAL FINAL (BLINDADO)
 # -----------------------------
 def signal(symbol):
 
@@ -83,7 +79,7 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # BIAS DAILY (fallback)
+    # BIAS DAILY
     # -----------------------------
     d1 = get_data(symbol, "1d", "2mo")
     bias = None
@@ -93,13 +89,15 @@ def signal(symbol):
             last_close = safe(d1.iloc[-1]["close"])
             avg_close = safe(d1["close"].tail(20).mean())
 
-            if last_close and avg_close:
+            if last_close is not None and avg_close is not None:
                 bias = "CALL" if last_close > avg_close else "PUT"
                 log(f"📊 BIAS DAILY: {bias}")
         except:
             pass
 
-    # fallback intradía
+    # -----------------------------
+    # FALLBACK INTRADÍA
+    # -----------------------------
     if bias is None:
         log("⚠️ FALLBACK INTRADÍA")
 
@@ -107,10 +105,18 @@ def signal(symbol):
         if h1_temp is None:
             return None
 
-        last = safe(h1_temp.iloc[-2]["close"])
-        avg = safe(h1_temp["close"].tail(20).mean())
+        try:
+            last = safe(h1_temp.iloc[-2]["close"])
+            avg = safe(h1_temp["close"].tail(20).mean())
 
-        bias = "CALL" if last > avg else "PUT"
+            if last is None or avg is None:
+                log("❌ FALLBACK DATA INVALIDA")
+                return None
+
+            bias = "CALL" if last > avg else "PUT"
+
+        except:
+            return None
 
     # -----------------------------
     # INTRADÍA
@@ -146,20 +152,28 @@ def signal(symbol):
     direction = bias
 
     # EMA20
-    if direction == "CALL" and close > ema20:
-        score += 1
-    elif direction == "PUT" and close < ema20:
-        score -= 1
+    if direction == "CALL":
+        if close > ema20:
+            score += 1
+        else:
+            return None
     else:
-        return None
+        if close < ema20:
+            score -= 1
+        else:
+            return None
 
     # Momentum
-    if direction == "CALL" and close > prev_close:
-        score += 1
-    elif direction == "PUT" and close < prev_close:
-        score -= 1
+    if direction == "CALL":
+        if close > prev_close:
+            score += 1
+        else:
+            return None
     else:
-        return None
+        if close < prev_close:
+            score -= 1
+        else:
+            return None
 
     # VWAP
     if direction == "CALL" and close > vwap:
