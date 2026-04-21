@@ -201,6 +201,7 @@ def signal(symbol):
         log("❌ DATA INTRADIA INSUFICIENTE")
         return None
 
+    # indicadores (pueden venir NaN)
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
 
@@ -208,15 +209,27 @@ def signal(symbol):
     prev = df.iloc[-2]
 
     close = safe(last["close"])
-    ema20 = safe(last["ema20"])
     prev_close = safe(prev["close"])
+    ema20 = safe(last["ema20"])
     volume = safe(last["volume"])
     vol_avg = safe(df["volume"].rolling(20).mean().iloc[-1])
     rsi = safe(last["rsi"])
 
-    if None in [close, ema20, prev_close, volume, vol_avg, rsi]:
-        log("❌ DATA INVALIDA")
+    # -----------------------------
+    # VALIDACIÓN FLEXIBLE
+    # -----------------------------
+    if close is None or prev_close is None:
+        log("❌ DATA CRÍTICA INVALIDA")
         return None
+
+    if ema20 is None:
+        log("⚠️ EMA NO DISPONIBLE")
+
+    if rsi is None:
+        log("⚠️ RSI NO DISPONIBLE")
+
+    if volume is None or vol_avg is None:
+        log("⚠️ VOLUMEN NO DISPONIBLE")
 
     score = 0
 
@@ -232,23 +245,24 @@ def signal(symbol):
     # momentum
     score += 1 if close > prev_close else -1
 
-    # EMA
-    if bias == "CALL" and close > ema20:
-        score += 1
-    elif bias == "PUT" and close < ema20:
-        score -= 1
+    # EMA (solo si existe)
+    if ema20 is not None:
+        if bias == "CALL" and close > ema20:
+            score += 1
+        elif bias == "PUT" and close < ema20:
+            score -= 1
 
-    # volumen flexible
-    if volume > vol_avg * 0.5:
-        score += 1 if bias == "CALL" else -1
-    else:
-        log("⚠️ VOLUMEN BAJO PERMITIDO")
+    # volumen (solo si existe)
+    if volume is not None and vol_avg is not None:
+        if volume > vol_avg * 0.5:
+            score += 1 if bias == "CALL" else -1
 
-    # RSI
-    if bias == "CALL" and rsi > 50:
-        score += 1
-    elif bias == "PUT" and rsi < 50:
-        score -= 1
+    # RSI (solo si existe)
+    if rsi is not None:
+        if bias == "CALL" and rsi > 50:
+            score += 1
+        elif bias == "PUT" and rsi < 50:
+            score -= 1
 
     log(f"🎯 SCORE: {score}")
 
