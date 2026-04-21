@@ -6,7 +6,7 @@ from flask import Flask
 
 import engine
 from risk import position_size
-from db import init_db
+from db import init_db, log_trade
 from ml import train_model, predict
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -21,6 +21,7 @@ last_signal = {}
 
 
 def send(msg):
+    print("ENVIANDO TELEGRAM...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
@@ -32,32 +33,52 @@ def home():
 
 def loop():
 
-    send("🚀 BOT CUANT ACTIVO")
+    print("🚀 LOOP INICIADO")
+
+    send("🚀 BOT ACTIVO")
 
     model = train_model()
 
     while True:
         try:
+            print("🔄 LOOP CORRIENDO")
+
             for sym in ["SPY", "QQQ"]:
+
+                print(f"Evaluando: {sym}")
 
                 sig = engine.signal(sym)
 
                 if not sig:
+                    print(f"{sym} ❌ SIN SEÑAL\n")
                     continue
 
                 key = f"{sym}_{sig['direction']}"
 
                 if last_signal.get(sym) == key:
+                    print(f"{sym} ⚠️ DUPLICADO\n")
                     continue
 
                 prob = predict(model, sig["score"])
 
+                print(f"{sym} Prob ML: {prob}")
+
                 if prob < 0.55:
+                    print(f"{sym} ❌ PROB BAJA\n")
                     continue
 
                 contracts = position_size(sig["premium"], prob)
 
                 tp = engine.dynamic_tp(sig["score"], prob)
+
+                trade_id = log_trade(
+                    sig["symbol"],
+                    sig["score"],
+                    sig["direction"],
+                    sig["price"],
+                    sig["strike"],
+                    sig["expiry"]
+                )
 
                 msg = (
                     f"🔥 {sig['direction']} {sym}\n"
@@ -67,25 +88,30 @@ def loop():
                     f"Strike: {sig['strike']}\n"
                     f"Exp: {sig['expiry']}\n\n"
                     f"Contratos: {contracts}\n"
-                    f"SL: -30% | TP: +{tp}%"
+                    f"SL: -30% | TP: +{tp}%\n\n"
+                    f"ID: {trade_id}"
                 )
 
                 send(msg)
 
                 last_signal[sym] = key
 
-            time.sleep(300)
+                print(f"{sym} ✅ SEÑAL ENVIADA\n")
+
+            time.sleep(60)
 
         except Exception as e:
-            print(e)
-            time.sleep(60)
+            print("ERROR LOOP:", e)
+            time.sleep(10)
 
 
 if __name__ == "__main__":
 
     init_db()
 
-    threading.Thread(target=loop).start()
+    t = threading.Thread(target=loop)
+    t.daemon = True
+    t.start()
 
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
