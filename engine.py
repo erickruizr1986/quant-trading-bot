@@ -6,7 +6,7 @@ from datetime import datetime
 import pytz
 import requests
 
-API_KEY = None  # se mantiene para options si usas polygon
+API_KEY = None  # opcional para options
 
 # -----------------------------
 # DEBUG
@@ -18,7 +18,7 @@ def log(msg):
         print(msg)
 
 # -----------------------------
-# DATA (YAHOO FINANCE)
+# DATA (YAHOO)
 # -----------------------------
 def get_data(symbol):
 
@@ -30,7 +30,7 @@ def get_data(symbol):
             progress=False
         )
 
-        if df is None or len(df) < 20:
+        if df is None or len(df) < 30:
             log(f"❌ DATA INSUFICIENTE YF ({symbol})")
             return None
 
@@ -66,7 +66,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# OPTIONS (POLYGON OPCIONAL)
+# OPCIONES (OPCIONAL)
 # -----------------------------
 def get_options_chain(symbol):
 
@@ -137,7 +137,7 @@ def dynamic_tp(score, prob):
     return int(max(0.25, min(tp, 1.0)) * 100)
 
 # -----------------------------
-# SIGNAL
+# SIGNAL (FIX COMPLETO)
 # -----------------------------
 def signal(symbol):
 
@@ -149,7 +149,7 @@ def signal(symbol):
 
     df = get_data(symbol)
 
-    if df is None or len(df) < 30:
+    if df is None:
         log("❌ SIN DATA")
         return None
 
@@ -162,12 +162,24 @@ def signal(symbol):
         log("❌ ERROR INDEX")
         return None
 
+    # 🔥 FIX CRÍTICO: convertir a float
+    try:
+        close = float(last["close"])
+        ema200 = float(last["ema200"])
+        prev_close = float(prev["close"])
+        volume = float(last["volume"])
+        vol_avg = float(df["volume"].rolling(20).mean().iloc[-1])
+        rsi = float(last["rsi"])
+    except:
+        log("❌ ERROR CONVERSION FLOAT")
+        return None
+
     score = 0
 
     # -----------------------------
-    # TENDENCIA EMA200
+    # TENDENCIA
     # -----------------------------
-    if last["close"] > last["ema200"]:
+    if close > ema200:
         direction = "CALL"
         score += 2
         log("✅ EMA200 CALL")
@@ -179,11 +191,11 @@ def signal(symbol):
     # -----------------------------
     # MOMENTUM
     # -----------------------------
-    if direction == "CALL" and last["close"] > prev["close"]:
+    if direction == "CALL" and close > prev_close:
         score += 1
         log("⚠️ MOMENTUM CALL")
 
-    elif direction == "PUT" and last["close"] < prev["close"]:
+    elif direction == "PUT" and close < prev_close:
         score -= 1
         log("⚠️ MOMENTUM PUT")
 
@@ -194,7 +206,7 @@ def signal(symbol):
     # -----------------------------
     # VOLUMEN
     # -----------------------------
-    if last["volume"] > df["volume"].rolling(20).mean().iloc[-1]:
+    if volume > vol_avg:
         log("✅ VOLUMEN OK")
     else:
         log("❌ VOLUMEN BAJO")
@@ -203,9 +215,9 @@ def signal(symbol):
     # -----------------------------
     # RSI
     # -----------------------------
-    if direction == "CALL" and 50 <= last["rsi"] <= 70:
+    if direction == "CALL" and 50 <= rsi <= 70:
         score += 1
-    elif direction == "PUT" and 30 <= last["rsi"] <= 50:
+    elif direction == "PUT" and 30 <= rsi <= 50:
         score -= 1
 
     log(f"🎯 SCORE FINAL: {score}")
@@ -218,14 +230,14 @@ def signal(symbol):
     # OPCIONES
     # -----------------------------
     chain = get_options_chain(symbol)
-    contract = select_contract(chain, last["close"], direction)
+    contract = select_contract(chain, close, direction)
 
     log("🚀 SIGNAL OK")
 
     return {
         "symbol": symbol,
         "direction": direction,
-        "price": round(last["close"], 2),
+        "price": round(close, 2),
         "score": score,
         "strike": contract["strike"],
         "expiry": contract["expiry"],
