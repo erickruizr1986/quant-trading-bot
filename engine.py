@@ -40,43 +40,48 @@ def get_data(symbol, interval, period):
             period=period,
             interval=interval,
             progress=False,
-            threads=False
+            threads=False,
+            group_by='column'
         )
 
         if df is None or df.empty:
             log(f"❌ DATA VACÍA ({symbol} {interval})")
             return None
 
+        # 🔥 FIX CRÍTICO: APLANAR COLUMNAS
+        if isinstance(df.columns, tuple) or hasattr(df.columns, 'levels'):
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
         df = df.reset_index()
 
-        cols = [c.lower() for c in df.columns]
+        # 🔥 NORMALIZACIÓN SEGURA
+        columns = {c.lower(): c for c in df.columns}
 
-        # CLOSE robusto
-        if "close" in cols:
-            df["close"] = df[df.columns[cols.index("close")]]
-        elif "adj close" in cols:
-            df["close"] = df[df.columns[cols.index("adj close")]]
+        if "close" in columns:
+            df["close"] = df[columns["close"]]
+        elif "adj close" in columns:
+            df["close"] = df[columns["adj close"]]
         else:
             log("❌ NO EXISTE CLOSE")
             return None
 
-        if "open" in cols:
-            df["open"] = df[df.columns[cols.index("open")]]
+        if "open" in columns:
+            df["open"] = df[columns["open"]]
 
-        if "high" in cols:
-            df["high"] = df[df.columns[cols.index("high")]]
+        if "high" in columns:
+            df["high"] = df[columns["high"]]
 
-        if "low" in cols:
-            df["low"] = df[df.columns[cols.index("low")]]
+        if "low" in columns:
+            df["low"] = df[columns["low"]]
 
-        if "volume" in cols:
-            df["volume"] = df[df.columns[cols.index("volume")]]
+        if "volume" in columns:
+            df["volume"] = df[columns["volume"]]
 
-        # limpieza crítica
+        # limpieza
         df = df.dropna(subset=["close"])
 
         if len(df) < 3:
-            log(f"❌ DATA INSUFICIENTE LIMPIA ({symbol})")
+            log(f"❌ DATA INSUFICIENTE ({symbol})")
             return None
 
         return df
@@ -84,7 +89,6 @@ def get_data(symbol, interval, period):
     except Exception as e:
         log(f"❌ ERROR DATA: {e}")
         return None
-
 # -----------------------------
 # HORARIO
 # -----------------------------
