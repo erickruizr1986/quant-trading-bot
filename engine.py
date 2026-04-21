@@ -25,7 +25,7 @@ def get_data(symbol, interval, period):
             progress=False
         )
 
-        if df is None or len(df) < 100:
+        if df is None or len(df) < 50:
             return None
 
         df = df.reset_index()
@@ -68,7 +68,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# SIGNAL PRO REAL
+# SIGNAL PRO REAL (SIN EMA DAILY)
 # -----------------------------
 def signal(symbol):
 
@@ -78,29 +78,30 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # CONTEXTO DAILY (🔥 FIX AQUÍ)
+    # 🔥 DAILY BIAS (SIN EMA)
     # -----------------------------
-    d1 = get_data(symbol, "1d", "6mo")
+    d1 = get_data(symbol, "1d", "2mo")
 
     if d1 is None:
         log("❌ SIN DATA DAILY")
         return None
 
-    d1["ema100"] = EMAIndicator(d1["close"], 100).ema_indicator()
-
-    daily_close = safe(d1.iloc[-1]["close"])
-    daily_ema = safe(d1.iloc[-1]["ema100"])
-
-    if None in [daily_close, daily_ema]:
-        log("❌ DATA DAILY INVALIDA (EMA)")
+    try:
+        last_close = safe(d1.iloc[-1]["close"])
+        avg_close = safe(d1["close"].tail(20).mean())
+    except:
         return None
 
-    if daily_close > daily_ema:
+    if None in [last_close, avg_close]:
+        log("❌ DATA DAILY INVALIDA")
+        return None
+
+    if last_close > avg_close:
         bias = "CALL"
-        log("📈 BIAS ALCISTA")
+        log("📈 BIAS ALCISTA (PRICE ACTION)")
     else:
         bias = "PUT"
-        log("📉 BIAS BAJISTA")
+        log("📉 BIAS BAJISTA (PRICE ACTION)")
 
     # -----------------------------
     # INTRADÍA
