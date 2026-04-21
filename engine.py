@@ -135,7 +135,6 @@ def signal(symbol):
     # =============================
     bias = None
 
-    # 1️⃣ DAILY
     d = get_data(symbol, "1d", "2mo")
 
     if d is not None and len(d) >= 20:
@@ -146,64 +145,51 @@ def signal(symbol):
             bias = "CALL" if last > avg else "PUT"
             log(f"📊 BIAS DAILY: {bias}")
 
-    # 2️⃣ 1H
     if bias is None:
         log("⚠️ FALLBACK 1H")
-
         h1 = get_data(symbol, "1h", "5d")
 
         if h1 is not None and len(h1) >= 3:
             last = safe(h1.iloc[-1]["close"])
             prev = safe(h1.iloc[-2]["close"])
-
-            if last is not None and prev is not None:
+            if last and prev:
                 bias = "CALL" if last > prev else "PUT"
                 log(f"📊 BIAS 1H: {bias}")
 
-    # 3️⃣ 5M
     if bias is None:
         log("⚠️ FALLBACK 5M")
-
         m5 = get_data(symbol, "5m", "1d")
 
         if m5 is not None and len(m5) >= 3:
             last = safe(m5.iloc[-1]["close"])
             prev = safe(m5.iloc[-2]["close"])
-
-            if last is not None and prev is not None:
+            if last and prev:
                 bias = "CALL" if last > prev else "PUT"
                 log(f"📊 BIAS 5M: {bias}")
 
-    # 4️⃣ FORZADO
     if bias is None:
         log("⚠️ BIAS FORZADO")
-
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d")
-
-            if hist is not None and not hist.empty:
-                bias = "CALL"
-                log("📊 BIAS DEFAULT: CALL")
-        except:
-            pass
-
-    if bias is None:
-        log("❌ SIN BIAS FINAL")
-        return None
+        bias = "CALL"
+        log("📊 BIAS DEFAULT: CALL")
 
     # =============================
     # 🔥 INTRADÍA
     # =============================
     df = get_data(symbol, "1h", "10d")
 
-    if df is None or len(df) < 3:
-        log("❌ DATA INTRADIA INSUFICIENTE")
+    if df is None:
         return None
 
-    # indicadores (pueden venir NaN)
-    df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
-    df["rsi"] = RSIIndicator(df["close"], 14).rsi()
+    # 🔥 LIMPIEZA CLAVE
+    df = df.dropna(subset=["close"])
+
+    if len(df) < 3:
+        log("❌ DATA LIMPIA INSUFICIENTE")
+        return None
+
+    # indicadores robustos
+    df["ema20"] = EMAIndicator(df["close"].ffill(), 20).ema_indicator()
+    df["rsi"] = RSIIndicator(df["close"].ffill(), 14).rsi()
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -215,21 +201,9 @@ def signal(symbol):
     vol_avg = safe(df["volume"].rolling(20).mean().iloc[-1])
     rsi = safe(last["rsi"])
 
-    # -----------------------------
-    # VALIDACIÓN FLEXIBLE
-    # -----------------------------
     if close is None or prev_close is None:
         log("❌ DATA CRÍTICA INVALIDA")
         return None
-
-    if ema20 is None:
-        log("⚠️ EMA NO DISPONIBLE")
-
-    if rsi is None:
-        log("⚠️ RSI NO DISPONIBLE")
-
-    if volume is None or vol_avg is None:
-        log("⚠️ VOLUMEN NO DISPONIBLE")
 
     score = 0
 
@@ -245,19 +219,19 @@ def signal(symbol):
     # momentum
     score += 1 if close > prev_close else -1
 
-    # EMA (solo si existe)
+    # EMA
     if ema20 is not None:
         if bias == "CALL" and close > ema20:
             score += 1
         elif bias == "PUT" and close < ema20:
             score -= 1
 
-    # volumen (solo si existe)
+    # volumen
     if volume is not None and vol_avg is not None:
         if volume > vol_avg * 0.5:
             score += 1 if bias == "CALL" else -1
 
-    # RSI (solo si existe)
+    # RSI
     if rsi is not None:
         if bias == "CALL" and rsi > 50:
             score += 1
@@ -269,9 +243,7 @@ def signal(symbol):
     if score == 0:
         log("⚠️ SEÑAL DEBIL PERMITIDA")
 
-    # =============================
-    # CLASIFICACIÓN
-    # =============================
+    # clasificación
     if abs(score) >= 3:
         strength = "FUERTE"
     elif abs(score) == 2:
@@ -281,13 +253,10 @@ def signal(symbol):
 
     direction = "CALL" if score > 0 else "PUT"
 
-    # =============================
-    # OPTIONS
-    # =============================
+    # opciones
     if IB_AVAILABLE:
         strike, expiry = get_best_option_ib(symbol, close, direction)
     else:
-        log("⚠️ IB NO DISPONIBLE")
         strike = round(close)
         expiry = "N/A"
 
@@ -295,9 +264,6 @@ def signal(symbol):
         strike = round(close)
         expiry = "N/A"
 
-    # =============================
-    # CAPITAL
-    # =============================
     size = position_size(strength)
     tp = take_profit(score)
 
