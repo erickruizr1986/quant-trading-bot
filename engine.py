@@ -5,8 +5,12 @@ from datetime import datetime
 import pytz
 import math
 
-# 🔥 IMPORT IB
-from ib_options import get_best_option_ib
+# 🔥 IMPORT IB SEGURO
+try:
+    from ib_options import get_best_option_ib
+    IB_AVAILABLE = True
+except:
+    IB_AVAILABLE = False
 
 DEBUG = True
 
@@ -123,7 +127,7 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # BIAS
+    # 🔥 BIAS DAILY (CORREGIDO)
     # -----------------------------
     d = get_data(symbol, "1d", "2mo")
 
@@ -133,11 +137,28 @@ def signal(symbol):
         last = safe(d.iloc[-1]["close"])
         avg = safe(d["close"].tail(20).mean())
 
-        if last and avg:
+        if last is not None and avg is not None:
             bias = "CALL" if last > avg else "PUT"
+            log(f"📊 BIAS DAILY: {bias}")
+
+    # -----------------------------
+    # 🔥 FALLBACK BIAS
+    # -----------------------------
+    if bias is None:
+        log("⚠️ FALLBACK BIAS INTRADÍA")
+
+        temp = get_data(symbol, "1h", "5d")
+
+        if temp is not None:
+            last = safe(temp.iloc[-2]["close"])
+            prev = safe(temp.iloc[-3]["close"])
+
+            if last is not None and prev is not None:
+                bias = "CALL" if last > prev else "PUT"
+                log(f"📊 BIAS FALLBACK: {bias}")
 
     if bias is None:
-        log("❌ SIN BIAS")
+        log("❌ SIN BIAS FINAL")
         return None
 
     # -----------------------------
@@ -222,12 +243,16 @@ def signal(symbol):
     direction = "CALL" if score > 0 else "PUT"
 
     # -----------------------------
-    # 🔥 OPTIONS REAL IB
+    # 🔥 OPTIONS (IB o fallback)
     # -----------------------------
-    strike, expiry = get_best_option_ib(symbol, close, direction)
+    if IB_AVAILABLE:
+        strike, expiry = get_best_option_ib(symbol, close, direction)
+    else:
+        log("⚠️ IB NO DISPONIBLE → FALLBACK")
+        strike = round(close)
+        expiry = "N/A"
 
     if strike is None:
-        log("⚠️ FALLBACK STRIKE")
         strike = round(close)
         expiry = "N/A"
 
