@@ -96,7 +96,7 @@ def signal(symbol):
             pass
 
     # -----------------------------
-    # FALLBACK INTRADÍA ROBUSTO
+    # FALLBACK INTRADÍA
     # -----------------------------
     if bias is None:
         log("⚠️ FALLBACK INTRADÍA")
@@ -111,9 +111,8 @@ def signal(symbol):
             last = safe(h1_temp.iloc[-2]["close"])
             avg = safe(h1_temp["close"].tail(20).mean())
 
-            # 🔥 fallback inteligente
             if last is None or avg is None:
-                log("⚠️ DATA INCOMPLETA → USANDO MOMENTUM SIMPLE")
+                log("⚠️ DATA INCOMPLETA → MOMENTUM SIMPLE")
 
                 prev = safe(h1_temp.iloc[-3]["close"])
 
@@ -121,7 +120,6 @@ def signal(symbol):
                     return None
 
                 bias = "CALL" if last > prev else "PUT"
-
             else:
                 bias = "CALL" if last > avg else "PUT"
 
@@ -206,10 +204,22 @@ def signal(symbol):
 
     log(f"🎯 SCORE: {score}")
 
-    if abs(score) < 2:
+    # -----------------------------
+    # FILTRO DINÁMICO
+    # -----------------------------
+    if abs(score) < 1:
+        log("❌ SIN EDGE")
         return None
 
-    strength = "FUERTE" if abs(score) >= 3 else "MEDIA"
+    if abs(score) >= 3:
+        strength = "FUERTE"
+        log("🔥 SEÑAL FUERTE")
+    elif abs(score) == 2:
+        strength = "MEDIA"
+        log("⚠️ SEÑAL MEDIA")
+    else:
+        strength = "DEBIL"
+        log("⚡ SEÑAL DEBIL (SCALP)")
 
     # -----------------------------
     # STRIKE + EXPIRY
