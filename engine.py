@@ -17,9 +17,9 @@ def log(msg):
         print(msg)
 
 # -----------------------------
-# DATA (CORREGIDO)
+# DATA CON FALLBACK
 # -----------------------------
-def get_data(symbol, tf):
+def get_data(symbol):
 
     try:
         end = datetime.now()
@@ -28,28 +28,50 @@ def get_data(symbol, tf):
         start_str = start.strftime("%Y-%m-%d")
         end_str = end.strftime("%Y-%m-%d")
 
-        timespan = "hour" if tf == "hour" else "day"
-
-        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/{start_str}/{end_str}?adjusted=true&sort=asc&limit=500&apiKey={API_KEY}"
+        # -----------------------------
+        # INTENTO INTRADÍA
+        # -----------------------------
+        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/hour/{start_str}/{end_str}?adjusted=true&sort=asc&limit=500&apiKey={API_KEY}"
 
         r = requests.get(url).json()
+
+        if "results" in r and len(r["results"]) > 20:
+            log(f"✅ DATA INTRADÍA ({symbol})")
+
+            df = pd.DataFrame(r["results"])
+
+            df["close"] = df["c"]
+            df["high"] = df["h"]
+            df["low"] = df["l"]
+            df["volume"] = df["v"]
+
+            return df
+
+        # -----------------------------
+        # FALLBACK A DIARIO
+        # -----------------------------
+        log(f"⚠️ FALLBACK DIARIO ({symbol})")
+
+        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_str}/{end_str}?adjusted=true&sort=asc&limit=200&apiKey={API_KEY}"
+
+        r = requests.get(url).json()
+
+        if "results" not in r or len(r["results"]) < 20:
+            log(f"❌ SIN DATA ({symbol})")
+            return None
+
+        df = pd.DataFrame(r["results"])
+
+        df["close"] = df["c"]
+        df["high"] = df["h"]
+        df["low"] = df["l"]
+        df["volume"] = df["v"]
+
+        return df
 
     except:
         log("❌ ERROR API")
         return None
-
-    if "results" not in r or len(r["results"]) < 20:
-        log(f"❌ DATA INSUFICIENTE API ({symbol})")
-        return None
-
-    df = pd.DataFrame(r["results"])
-
-    df["close"] = df["c"]
-    df["high"] = df["h"]
-    df["low"] = df["l"]
-    df["volume"] = df["v"]
-
-    return df
 
 # -----------------------------
 # INDICADORES
@@ -133,7 +155,7 @@ def dynamic_tp(score, prob):
     return int(max(0.25, min(tp, 1.0)) * 100)
 
 # -----------------------------
-# 🚀 SIGNAL (CLAVE)
+# SIGNAL FINAL
 # -----------------------------
 def signal(symbol):
 
@@ -143,7 +165,7 @@ def signal(symbol):
         log("❌ FUERA DE HORARIO")
         return None
 
-    df = get_data(symbol, "hour")
+    df = get_data(symbol)
 
     if df is None or len(df) < 30:
         log("❌ SIN DATA")
@@ -161,7 +183,7 @@ def signal(symbol):
     score = 0
 
     # -----------------------------
-    # TENDENCIA EMA200
+    # TENDENCIA
     # -----------------------------
     if last["close"] > last["ema200"]:
         direction = "CALL"
@@ -173,7 +195,7 @@ def signal(symbol):
         log("✅ EMA200 PUT")
 
     # -----------------------------
-    # MOMENTUM SIMPLE (ROBUSTO)
+    # MOMENTUM
     # -----------------------------
     if direction == "CALL" and last["close"] > prev["close"]:
         score += 1
