@@ -83,8 +83,9 @@ def valid_session():
 # -----------------------------
 # TAKE PROFIT DINÁMICO (FIX)
 # -----------------------------
-def dynamic_tp(score):
+def dynamic_tp(score, price=None):
 
+    # ignoramos price si lo envían
     if abs(score) >= 2:
         return "40%-80%"
     elif abs(score) == 1:
