@@ -5,6 +5,9 @@ from datetime import datetime
 import pytz
 import math
 
+# 🔥 IMPORT IB
+from ib_options import get_best_option_ib
+
 DEBUG = True
 
 def log(msg):
@@ -47,46 +50,7 @@ def get_data(symbol, interval, period):
         return None
 
 # -----------------------------
-# OPTIONS CHAIN REAL
-# -----------------------------
-def get_best_contract(symbol, price, direction):
-
-    try:
-        ticker = yf.Ticker(symbol)
-
-        expirations = ticker.options
-
-        if not expirations:
-            return round(price), "N/A"
-
-        exp = expirations[0]  # nearest expiry
-
-        chain = ticker.option_chain(exp)
-
-        if direction == "CALL":
-            df = chain.calls
-        else:
-            df = chain.puts
-
-        # filtro liquidez
-        df = df[df["volume"] > 10]
-        df = df[df["openInterest"] > 50]
-
-        if df.empty:
-            return round(price), exp
-
-        # strike más cercano al precio
-        df["diff"] = abs(df["strike"] - price)
-        best = df.sort_values("diff").iloc[0]
-
-        return best["strike"], exp
-
-    except Exception as e:
-        log(f"ERROR OPTIONS: {e}")
-        return round(price), "N/A"
-
-# -----------------------------
-# HORARIO
+# HORARIO PRO
 # -----------------------------
 def valid_session():
     ny = pytz.timezone("America/New_York")
@@ -102,6 +66,29 @@ def valid_session():
         return True
 
     return False
+
+# -----------------------------
+# VELA
+# -----------------------------
+def candle_strength(c):
+
+    o = safe(c["open"])
+    c_ = safe(c["close"])
+    h = safe(c["high"])
+    l = safe(c["low"])
+
+    if None in [o, c_, h, l]:
+        return None
+
+    body = abs(c_ - o)
+    rng = h - l
+
+    if rng == 0:
+        return None
+
+    strength = body / rng
+
+    return strength, c_ > o
 
 # -----------------------------
 # CAPITAL
@@ -129,9 +116,10 @@ def take_profit(score):
 # -----------------------------
 def signal(symbol):
 
-    log(f"\nANALIZANDO {symbol}")
+    log(f"\n🔍 ANALIZANDO {symbol}")
 
     if not valid_session():
+        log("⏰ FUERA DE HORARIO")
         return None
 
     # -----------------------------
@@ -149,6 +137,7 @@ def signal(symbol):
             bias = "CALL" if last > avg else "PUT"
 
     if bias is None:
+        log("❌ SIN BIAS")
         return None
 
     # -----------------------------
@@ -157,6 +146,7 @@ def signal(symbol):
     df = get_data(symbol, "1h", "10d")
 
     if df is None:
+        log("❌ SIN DATA")
         return None
 
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
@@ -173,31 +163,55 @@ def signal(symbol):
     rsi = safe(last["rsi"])
 
     if None in [close, ema20, prev_close, volume, vol_avg, rsi]:
+        log("❌ DATA INVALIDA")
         return None
 
     score = 0
 
+    # vela
+    cs = candle_strength(last)
+    if cs:
+        strength_candle, bullish = cs
+
+        if bullish:
+            score += 1
+        else:
+            score -= 1
+
+        if strength_candle > 0.6:
+            score += 1 if bullish else -1
+
+    # momentum
     if close > prev_close:
         score += 1
     else:
         score -= 1
 
+    # ema
     if bias == "CALL" and close > ema20:
         score += 1
     elif bias == "PUT" and close < ema20:
         score -= 1
 
+    # volumen
     if volume > vol_avg * 0.6:
         score += 1 if bias == "CALL" else -1
 
+    # rsi
     if bias == "CALL" and rsi > 50:
         score += 1
     elif bias == "PUT" and rsi < 50:
         score -= 1
 
+    log(f"🎯 SCORE: {score}")
+
     if abs(score) < 1:
+        log("❌ SIN EDGE")
         return None
 
+    # -----------------------------
+    # CLASIFICACION
+    # -----------------------------
     if abs(score) >= 3:
         strength = "FUERTE"
     elif abs(score) == 2:
@@ -207,13 +221,23 @@ def signal(symbol):
 
     direction = "CALL" if score > 0 else "PUT"
 
-    # 🔥 AQUÍ ESTÁ LA MAGIA REAL
-    strike, expiry = get_best_contract(symbol, close, direction)
+    # -----------------------------
+    # 🔥 OPTIONS REAL IB
+    # -----------------------------
+    strike, expiry = get_best_option_ib(symbol, close, direction)
 
+    if strike is None:
+        log("⚠️ FALLBACK STRIKE")
+        strike = round(close)
+        expiry = "N/A"
+
+    # -----------------------------
+    # CAPITAL
+    # -----------------------------
     size = position_size(strength)
     tp = take_profit(score)
 
-    log("SIGNAL OK")
+    log("🚀 SIGNAL OK")
 
     return {
         "symbol": symbol,
