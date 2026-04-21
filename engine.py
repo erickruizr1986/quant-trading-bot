@@ -5,12 +5,10 @@ from ta.momentum import RSIIndicator
 from datetime import datetime
 import pytz
 import requests
+import math
 
-API_KEY = None  # opcional para options
+API_KEY = None
 
-# -----------------------------
-# DEBUG
-# -----------------------------
 DEBUG = True
 
 def log(msg):
@@ -18,19 +16,19 @@ def log(msg):
         print(msg)
 
 # -----------------------------
-# DATA (YAHOO)
+# DATA
 # -----------------------------
 def get_data(symbol):
 
     try:
         df = yf.download(
             symbol,
-            period="5d",
+            period="10d",  # 🔥 más data para evitar NaN
             interval="1h",
             progress=False
         )
 
-        if df is None or len(df) < 30:
+        if df is None or len(df) < 50:
             log(f"❌ DATA INSUFICIENTE YF ({symbol})")
             return None
 
@@ -53,8 +51,10 @@ def get_data(symbol):
 # INDICADORES
 # -----------------------------
 def add_ind(df):
+
     df["ema200"] = EMAIndicator(df["close"], 200).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
+
     return df
 
 # -----------------------------
@@ -66,7 +66,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# OPCIONES (OPCIONAL)
+# OPTIONS
 # -----------------------------
 def get_options_chain(symbol):
 
@@ -78,7 +78,6 @@ def get_options_chain(symbol):
     try:
         r = requests.get(url).json()
     except:
-        log("❌ ERROR OPTIONS API")
         return []
 
     return r.get("results", [])
@@ -118,26 +117,19 @@ def select_contract(chain, price, direction):
     }
 
 # -----------------------------
-# TAKE PROFIT DINÁMICO
+# VALIDADOR DE DATOS
 # -----------------------------
-def dynamic_tp(score, prob):
-
-    tp = 0.5
-
-    if abs(score) >= 5:
-        tp += 0.2
-    elif abs(score) == 4:
-        tp += 0.1
-    else:
-        tp -= 0.1
-
-    if prob > 0.7:
-        tp += 0.1
-
-    return int(max(0.25, min(tp, 1.0)) * 100)
+def safe_float(x):
+    try:
+        v = float(x)
+        if math.isnan(v):
+            return None
+        return v
+    except:
+        return None
 
 # -----------------------------
-# SIGNAL (FIX COMPLETO)
+# SIGNAL
 # -----------------------------
 def signal(symbol):
 
@@ -162,16 +154,16 @@ def signal(symbol):
         log("❌ ERROR INDEX")
         return None
 
-    # 🔥 FIX CRÍTICO: convertir a float
-    try:
-        close = float(last["close"])
-        ema200 = float(last["ema200"])
-        prev_close = float(prev["close"])
-        volume = float(last["volume"])
-        vol_avg = float(df["volume"].rolling(20).mean().iloc[-1])
-        rsi = float(last["rsi"])
-    except:
-        log("❌ ERROR CONVERSION FLOAT")
+    # 🔥 VALIDACIÓN SEGURA
+    close = safe_float(last["close"])
+    ema200 = safe_float(last["ema200"])
+    prev_close = safe_float(prev["close"])
+    volume = safe_float(last["volume"])
+    vol_avg = safe_float(df["volume"].rolling(20).mean().iloc[-1])
+    rsi = safe_float(last["rsi"])
+
+    if None in [close, ema200, prev_close, volume, vol_avg, rsi]:
+        log("❌ DATA INVALIDA (NaN)")
         return None
 
     score = 0
@@ -226,9 +218,6 @@ def signal(symbol):
         log("❌ SCORE BAJO")
         return None
 
-    # -----------------------------
-    # OPCIONES
-    # -----------------------------
     chain = get_options_chain(symbol)
     contract = select_contract(chain, close, direction)
 
