@@ -8,6 +8,9 @@ import pytz
 API_KEY = None
 
 
+# -----------------------------
+# DATA
+# -----------------------------
 def get_data(symbol, tf):
 
     timespan = "hour" if tf == "hour" else "day"
@@ -34,54 +37,108 @@ def add_ind(df):
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
-    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     return df
 
 
-def get_vix_trend():
+# -----------------------------
+# HORARIO NY
+# -----------------------------
+def valid_session():
+
+    ny = pytz.timezone("America/New_York")
+    now = datetime.now(ny)
+
+    h = now.hour
+    m = now.minute
+
+    return (h > 9 or (h == 9 and m >= 30)) and h < 16
+
+
+# -----------------------------
+# VIX
+# -----------------------------
+def get_vix():
 
     vix = get_data("VIX", "day")
 
     if vix is None or len(vix) < 5:
         return 0
 
-    return vix["close"].iloc[-1] - vix["close"].iloc[-5]
+    return round(vix["close"].iloc[-1] - vix["close"].iloc[-5], 2)
 
 
-def valid_session():
+# -----------------------------
+# OPTIONS
+# -----------------------------
+def get_options_chain(symbol):
 
-    ny = pytz.timezone("America/New_York")
-    now = datetime.now(ny)
+    url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=50&apiKey={API_KEY}"
 
-    hour = now.hour
-    minute = now.minute
+    r = requests.get(url).json()
 
-    if (hour > 9 or (hour == 9 and minute >= 30)) and hour < 16:
-        return True
-
-    return False
+    return r.get("results", [])
 
 
-def simulate_option(price, direction):
+def select_contract(chain, price, direction):
 
-    strike = round(price)
+    best = None
+    min_diff = 999
 
-    if direction == "CALL":
-        strike -= 1
-        delta = 0.4
+    for c in chain:
+        try:
+            strike = float(c["strike_price"])
+            typ = c["contract_type"]
+
+            if direction == "CALL" and typ != "call":
+                continue
+            if direction == "PUT" and typ != "put":
+                continue
+
+            diff = abs(strike - price)
+
+            if diff < min_diff:
+                min_diff = diff
+                best = c
+
+        except:
+            continue
+
+    if not best:
+        return None
+
+    return {
+        "strike": best["strike_price"],
+        "expiry": best["expiration_date"]
+    }
+
+
+# -----------------------------
+# TAKE PROFIT DINÁMICO
+# -----------------------------
+def dynamic_tp(score, prob):
+
+    tp = 0.5
+
+    if abs(score) >= 5:
+        tp += 0.2
+    elif abs(score) == 4:
+        tp += 0.1
     else:
-        strike += 1
-        delta = 0.4
+        tp -= 0.1
 
-    premium = 1.2
-    expected_move = price * 0.003
+    if prob > 0.7:
+        tp += 0.1
+    elif prob < 0.6:
+        tp -= 0.1
 
-    gain = expected_move * delta
-    roi = (gain / premium) * 100
+    tp = max(0.25, min(tp, 1.0))
 
-    return strike, premium, delta, round(roi, 2)
+    return int(tp * 100)
 
 
+# -----------------------------
+# SIGNAL
+# -----------------------------
 def signal(symbol):
 
     if not valid_session():
@@ -100,17 +157,15 @@ def signal(symbol):
 
     score = 0
 
-    # tendencia
-    ema_slope = d1["ema20"].iloc[-1] - d1["ema20"].iloc[-5]
-
-    if d1["ema20"].iloc[-1] > d1["ema40"].iloc[-1] and ema_slope > 0:
+    if d1["ema20"].iloc[-1] > d1["ema40"].iloc[-1]:
         score += 2
-    elif d1["ema20"].iloc[-1] < d1["ema40"].iloc[-1] and ema_slope < 0:
+        direction = "CALL"
+    elif d1["ema20"].iloc[-1] < d1["ema40"].iloc[-1]:
         score -= 2
+        direction = "PUT"
     else:
         return None
 
-    # breakout
     high = h1["close"].iloc[-15:].max()
     low = h1["close"].iloc[-15:].min()
 
@@ -121,41 +176,30 @@ def signal(symbol):
     else:
         return None
 
-    # volumen
-    vol_mean = h1["volume"].rolling(20).mean().iloc[-1]
-    if last["volume"] < vol_mean:
+    if last["volume"] < h1["volume"].rolling(20).mean().iloc[-1]:
         return None
 
-    # RSI
     if 50 <= last["rsi"] <= 70:
         score += 1
     elif 30 <= last["rsi"] <= 50:
         score -= 1
 
-    # VIX
-    vix = get_vix_trend()
-    if vix < -1:
-        score += 1
-    elif vix > 1:
-        score -= 1
-
-    print(f"{symbol} SCORE: {score}")
-
     if abs(score) < 3:
         return None
 
-    direction = "CALL" if score > 0 else "PUT"
+    chain = get_options_chain(symbol)
+    contract = select_contract(chain, last["close"], direction)
 
-    strike, premium, delta, roi = simulate_option(last["close"], direction)
+    if not contract:
+        return None
 
     return {
         "symbol": symbol,
         "direction": direction,
         "price": round(last["close"], 2),
         "score": score,
-        "type": "PRO",
-        "strike": strike,
-        "premium": premium,
-        "delta": delta,
-        "roi": roi
+        "strike": contract["strike"],
+        "expiry": contract["expiry"],
+        "premium": 1.2,
+        "vix": get_vix()
     }
