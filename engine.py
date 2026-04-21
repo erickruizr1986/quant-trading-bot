@@ -44,7 +44,7 @@ def get_data(symbol, interval, period):
         )
 
         if df is None or len(df) < 5:
-            log(f"❌ DATA INSUFICIENTE ({symbol})")
+            log(f"❌ DATA INSUFICIENTE ({symbol} {interval})")
             return None
 
         df = df.reset_index()
@@ -130,13 +130,15 @@ def signal(symbol):
         log("⏰ FUERA DE HORARIO")
         return None
 
-    # -----------------------------
-    # BIAS DAILY
-    # -----------------------------
-    d = get_data(symbol, "1d", "2mo")
+    # =============================
+    # 🔥 BIAS MULTI-NIVEL
+    # =============================
     bias = None
 
-    if d is not None:
+    # 1️⃣ DAILY
+    d = get_data(symbol, "1d", "2mo")
+
+    if d is not None and len(d) >= 20:
         last = safe(d.iloc[-1]["close"])
         avg = safe(d["close"].tail(20).mean())
 
@@ -144,29 +146,55 @@ def signal(symbol):
             bias = "CALL" if last > avg else "PUT"
             log(f"📊 BIAS DAILY: {bias}")
 
-    # -----------------------------
-    # FALLBACK BIAS
-    # -----------------------------
+    # 2️⃣ 1H
     if bias is None:
-        log("⚠️ FALLBACK BIAS INTRADÍA")
+        log("⚠️ FALLBACK 1H")
 
-        temp = get_data(symbol, "1h", "5d")
+        h1 = get_data(symbol, "1h", "5d")
 
-        if temp is not None and len(temp) >= 3:
-            last = safe(temp.iloc[-1]["close"])
-            prev = safe(temp.iloc[-2]["close"])
+        if h1 is not None and len(h1) >= 3:
+            last = safe(h1.iloc[-1]["close"])
+            prev = safe(h1.iloc[-2]["close"])
 
             if last is not None and prev is not None:
                 bias = "CALL" if last > prev else "PUT"
-                log(f"📊 BIAS FALLBACK: {bias}")
+                log(f"📊 BIAS 1H: {bias}")
+
+    # 3️⃣ 5M
+    if bias is None:
+        log("⚠️ FALLBACK 5M")
+
+        m5 = get_data(symbol, "5m", "1d")
+
+        if m5 is not None and len(m5) >= 3:
+            last = safe(m5.iloc[-1]["close"])
+            prev = safe(m5.iloc[-2]["close"])
+
+            if last is not None and prev is not None:
+                bias = "CALL" if last > prev else "PUT"
+                log(f"📊 BIAS 5M: {bias}")
+
+    # 4️⃣ FORZADO
+    if bias is None:
+        log("⚠️ BIAS FORZADO")
+
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="1d")
+
+            if hist is not None and not hist.empty:
+                bias = "CALL"
+                log("📊 BIAS DEFAULT: CALL")
+        except:
+            pass
 
     if bias is None:
         log("❌ SIN BIAS FINAL")
         return None
 
-    # -----------------------------
-    # INTRADÍA
-    # -----------------------------
+    # =============================
+    # 🔥 INTRADÍA
+    # =============================
     df = get_data(symbol, "1h", "10d")
 
     if df is None or len(df) < 3:
@@ -210,7 +238,7 @@ def signal(symbol):
     elif bias == "PUT" and close < ema20:
         score -= 1
 
-    # volumen (más flexible)
+    # volumen flexible
     if volume > vol_avg * 0.5:
         score += 1 if bias == "CALL" else -1
     else:
@@ -224,13 +252,12 @@ def signal(symbol):
 
     log(f"🎯 SCORE: {score}")
 
-    # 🔥 NO BLOQUEA SI SCORE BAJO
     if score == 0:
         log("⚠️ SEÑAL DEBIL PERMITIDA")
 
-    # -----------------------------
+    # =============================
     # CLASIFICACIÓN
-    # -----------------------------
+    # =============================
     if abs(score) >= 3:
         strength = "FUERTE"
     elif abs(score) == 2:
@@ -240,13 +267,13 @@ def signal(symbol):
 
     direction = "CALL" if score > 0 else "PUT"
 
-    # -----------------------------
+    # =============================
     # OPTIONS
-    # -----------------------------
+    # =============================
     if IB_AVAILABLE:
         strike, expiry = get_best_option_ib(symbol, close, direction)
     else:
-        log("⚠️ IB NO DISPONIBLE → FALLBACK")
+        log("⚠️ IB NO DISPONIBLE")
         strike = round(close)
         expiry = "N/A"
 
@@ -254,9 +281,9 @@ def signal(symbol):
         strike = round(close)
         expiry = "N/A"
 
-    # -----------------------------
+    # =============================
     # CAPITAL
-    # -----------------------------
+    # =============================
     size = position_size(strength)
     tp = take_profit(score)
 
