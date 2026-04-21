@@ -5,6 +5,12 @@ from ta.momentum import RSIIndicator
 from datetime import datetime
 import pytz
 
+DEBUG = True
+
+def log(msg):
+    if DEBUG:
+        print(msg)
+
 API_KEY = None
 
 
