@@ -6,7 +6,8 @@ from flask import Flask
 
 import engine
 from risk import position_size
-from db import init_db, log_trade
+from db import init_db
+from ml import train_model, predict
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -16,8 +17,7 @@ engine.API_KEY = API_KEY
 
 app = Flask(__name__)
 
-last_signals = {}
-last_time = {}
+last_signal = {}
 
 
 def send(msg):
@@ -32,7 +32,9 @@ def home():
 
 def loop():
 
-    send("🚀 BOT PROFESIONAL ACTIVO")
+    send("🚀 BOT CUANT ACTIVO")
+
+    model = train_model()
 
     while True:
         try:
@@ -45,45 +47,37 @@ def loop():
 
                 key = f"{sym}_{sig['direction']}"
 
-                now = time.time()
-
-                if last_signals.get(sym) == key:
+                if last_signal.get(sym) == key:
                     continue
 
-                if sym in last_time and now - last_time[sym] < 1800:
+                prob = predict(model, sig["score"])
+
+                if prob < 0.55:
                     continue
 
-                last_signals[sym] = key
-                last_time[sym] = now
+                contracts = position_size(sig["premium"], prob)
 
-                contracts = position_size(sig["premium"], sig["score"])
-
-                if contracts == 0:
-                    continue
+                tp = engine.dynamic_tp(sig["score"], prob)
 
                 msg = (
                     f"🔥 {sig['direction']} {sym}\n"
                     f"Precio: {sig['price']}\n"
-                    f"Score: {sig['score']}\n\n"
-                    f"Contratos: {contracts}\n"
+                    f"Score: {sig['score']}\n"
+                    f"Prob: {round(prob*100,1)}%\n\n"
                     f"Strike: {sig['strike']}\n"
-                    f"Prima: {sig['premium']}\n\n"
-                    f"SL: -30% | TP: +50%"
+                    f"Exp: {sig['expiry']}\n\n"
+                    f"Contratos: {contracts}\n"
+                    f"SL: -30% | TP: +{tp}%"
                 )
 
                 send(msg)
 
-                log_trade(
-                    sig["symbol"],
-                    sig["direction"],
-                    sig["price"],
-                    sig["score"]
-                )
+                last_signal[sym] = key
 
             time.sleep(300)
 
         except Exception as e:
-            print("ERROR:", e)
+            print(e)
             time.sleep(60)
 
 
