@@ -23,11 +23,16 @@ def get_data(symbol, tf):
 
     timespan = "hour" if tf == "hour" else "day"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=150&apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=200&apiKey={API_KEY}"
 
-    r = requests.get(url).json()
+    try:
+        r = requests.get(url).json()
+    except:
+        log("❌ ERROR API")
+        return None
 
-    if "results" not in r:
+    if "results" not in r or len(r["results"]) < 30:
+        log("❌ DATA INSUFICIENTE API")
         return None
 
     df = pd.DataFrame(r["results"]).sort_values("t")
@@ -71,7 +76,11 @@ def get_options_chain(symbol):
 
     url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=50&apiKey={API_KEY}"
 
-    r = requests.get(url).json()
+    try:
+        r = requests.get(url).json()
+    except:
+        log("❌ ERROR OPTIONS API")
+        return []
 
     return r.get("results", [])
 
@@ -126,7 +135,7 @@ def dynamic_tp(score, prob):
     return int(max(0.25, min(tp, 1.0)) * 100)
 
 # -----------------------------
-# SIGNAL MEJORADO
+# SIGNAL ROBUSTO
 # -----------------------------
 def signal(symbol):
 
@@ -142,11 +151,20 @@ def signal(symbol):
         log("❌ SIN DATA")
         return None
 
+    # protección fuerte
+    if len(df) < 30:
+        log("❌ DATA INSUFICIENTE")
+        return None
+
     df = add_ind(df)
     df = calculate_vwap(df)
 
-    last = df.iloc[-2]
-    prev = df.iloc[-3]
+    try:
+        last = df.iloc[-2]
+        prev = df.iloc[-3]
+    except:
+        log("❌ ERROR INDEX")
+        return None
 
     score = 0
 
@@ -177,7 +195,7 @@ def signal(symbol):
         log("✅ BREAKOUT FUERTE DOWN")
 
     else:
-        # breakout suave
+        # momentum suave
         if direction == "CALL" and last["close"] > prev["close"]:
             score += 1
             log("⚠️ MOMENTUM CALL")
