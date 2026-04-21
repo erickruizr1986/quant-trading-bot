@@ -1,11 +1,12 @@
-import requests
+import yfinance as yf
 import pandas as pd
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
+import requests
 
-API_KEY = None
+API_KEY = None  # se mantiene para options si usas polygon
 
 # -----------------------------
 # DEBUG
@@ -17,60 +18,35 @@ def log(msg):
         print(msg)
 
 # -----------------------------
-# DATA CON FALLBACK
+# DATA (YAHOO FINANCE)
 # -----------------------------
 def get_data(symbol):
 
     try:
-        end = datetime.now()
-        start = end - timedelta(days=5)
+        df = yf.download(
+            symbol,
+            period="5d",
+            interval="1h",
+            progress=False
+        )
 
-        start_str = start.strftime("%Y-%m-%d")
-        end_str = end.strftime("%Y-%m-%d")
-
-        # -----------------------------
-        # INTENTO INTRADÍA
-        # -----------------------------
-        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/hour/{start_str}/{end_str}?adjusted=true&sort=asc&limit=500&apiKey={API_KEY}"
-
-        r = requests.get(url).json()
-
-        if "results" in r and len(r["results"]) > 20:
-            log(f"✅ DATA INTRADÍA ({symbol})")
-
-            df = pd.DataFrame(r["results"])
-
-            df["close"] = df["c"]
-            df["high"] = df["h"]
-            df["low"] = df["l"]
-            df["volume"] = df["v"]
-
-            return df
-
-        # -----------------------------
-        # FALLBACK A DIARIO
-        # -----------------------------
-        log(f"⚠️ FALLBACK DIARIO ({symbol})")
-
-        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_str}/{end_str}?adjusted=true&sort=asc&limit=200&apiKey={API_KEY}"
-
-        r = requests.get(url).json()
-
-        if "results" not in r or len(r["results"]) < 20:
-            log(f"❌ SIN DATA ({symbol})")
+        if df is None or len(df) < 20:
+            log(f"❌ DATA INSUFICIENTE YF ({symbol})")
             return None
 
-        df = pd.DataFrame(r["results"])
+        df = df.reset_index()
 
-        df["close"] = df["c"]
-        df["high"] = df["h"]
-        df["low"] = df["l"]
-        df["volume"] = df["v"]
+        df["close"] = df["Close"]
+        df["high"] = df["High"]
+        df["low"] = df["Low"]
+        df["volume"] = df["Volume"]
+
+        log(f"✅ DATA YAHOO OK ({symbol})")
 
         return df
 
-    except:
-        log("❌ ERROR API")
+    except Exception as e:
+        log(f"❌ ERROR YFINANCE: {e}")
         return None
 
 # -----------------------------
@@ -90,9 +66,12 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# OPCIONES
+# OPTIONS (POLYGON OPCIONAL)
 # -----------------------------
 def get_options_chain(symbol):
+
+    if not API_KEY:
+        return []
 
     url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=50&apiKey={API_KEY}"
 
@@ -105,6 +84,9 @@ def get_options_chain(symbol):
     return r.get("results", [])
 
 def select_contract(chain, price, direction):
+
+    if not chain:
+        return {"strike": round(price), "expiry": "N/A"}
 
     best = None
     diff_min = 999
@@ -128,7 +110,7 @@ def select_contract(chain, price, direction):
             continue
 
     if not best:
-        return None
+        return {"strike": round(price), "expiry": "N/A"}
 
     return {
         "strike": best["strike_price"],
@@ -155,7 +137,7 @@ def dynamic_tp(score, prob):
     return int(max(0.25, min(tp, 1.0)) * 100)
 
 # -----------------------------
-# SIGNAL FINAL
+# SIGNAL
 # -----------------------------
 def signal(symbol):
 
@@ -183,7 +165,7 @@ def signal(symbol):
     score = 0
 
     # -----------------------------
-    # TENDENCIA
+    # TENDENCIA EMA200
     # -----------------------------
     if last["close"] > last["ema200"]:
         direction = "CALL"
@@ -237,10 +219,6 @@ def signal(symbol):
     # -----------------------------
     chain = get_options_chain(symbol)
     contract = select_contract(chain, last["close"], direction)
-
-    if not contract:
-        log("❌ SIN OPCIÓN")
-        return None
 
     log("🚀 SIGNAL OK")
 
