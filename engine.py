@@ -31,7 +31,7 @@ def safe(x):
         return None
 
 # -----------------------------
-# DATA
+# DATA (ROBUSTA)
 # -----------------------------
 def get_data(symbol, interval, period):
     try:
@@ -43,17 +43,41 @@ def get_data(symbol, interval, period):
             threads=False
         )
 
-        if df is None or len(df) < 5:
-            log(f"❌ DATA INSUFICIENTE ({symbol} {interval})")
+        if df is None or df.empty:
+            log(f"❌ DATA VACÍA ({symbol} {interval})")
             return None
 
         df = df.reset_index()
 
-        df["close"] = df["Close"]
-        df["open"] = df["Open"]
-        df["high"] = df["High"]
-        df["low"] = df["Low"]
-        df["volume"] = df["Volume"]
+        cols = [c.lower() for c in df.columns]
+
+        # CLOSE robusto
+        if "close" in cols:
+            df["close"] = df[df.columns[cols.index("close")]]
+        elif "adj close" in cols:
+            df["close"] = df[df.columns[cols.index("adj close")]]
+        else:
+            log("❌ NO EXISTE CLOSE")
+            return None
+
+        if "open" in cols:
+            df["open"] = df[df.columns[cols.index("open")]]
+
+        if "high" in cols:
+            df["high"] = df[df.columns[cols.index("high")]]
+
+        if "low" in cols:
+            df["low"] = df[df.columns[cols.index("low")]]
+
+        if "volume" in cols:
+            df["volume"] = df[df.columns[cols.index("volume")]]
+
+        # limpieza crítica
+        df = df.dropna(subset=["close"])
+
+        if len(df) < 3:
+            log(f"❌ DATA INSUFICIENTE LIMPIA ({symbol})")
+            return None
 
         return df
 
@@ -83,10 +107,10 @@ def valid_session():
 # VELA
 # -----------------------------
 def candle_strength(c):
-    o = safe(c["open"])
-    c_ = safe(c["close"])
-    h = safe(c["high"])
-    l = safe(c["low"])
+    o = safe(c.get("open"))
+    c_ = safe(c.get("close"))
+    h = safe(c.get("high"))
+    l = safe(c.get("low"))
 
     if None in [o, c_, h, l]:
         return None
@@ -152,7 +176,7 @@ def signal(symbol):
         if h1 is not None and len(h1) >= 3:
             last = safe(h1.iloc[-1]["close"])
             prev = safe(h1.iloc[-2]["close"])
-            if last and prev:
+            if last is not None and prev is not None:
                 bias = "CALL" if last > prev else "PUT"
                 log(f"📊 BIAS 1H: {bias}")
 
@@ -163,7 +187,7 @@ def signal(symbol):
         if m5 is not None and len(m5) >= 3:
             last = safe(m5.iloc[-1]["close"])
             prev = safe(m5.iloc[-2]["close"])
-            if last and prev:
+            if last is not None and prev is not None:
                 bias = "CALL" if last > prev else "PUT"
                 log(f"📊 BIAS 5M: {bias}")
 
@@ -180,14 +204,6 @@ def signal(symbol):
     if df is None:
         return None
 
-    # 🔥 LIMPIEZA CLAVE
-    df = df.dropna(subset=["close"])
-
-    if len(df) < 3:
-        log("❌ DATA LIMPIA INSUFICIENTE")
-        return None
-
-    # indicadores robustos
     df["ema20"] = EMAIndicator(df["close"].ffill(), 20).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"].ffill(), 14).rsi()
 
@@ -197,8 +213,8 @@ def signal(symbol):
     close = safe(last["close"])
     prev_close = safe(prev["close"])
     ema20 = safe(last["ema20"])
-    volume = safe(last["volume"])
-    vol_avg = safe(df["volume"].rolling(20).mean().iloc[-1])
+    volume = safe(last.get("volume"))
+    vol_avg = safe(df["volume"].rolling(20).mean().iloc[-1]) if "volume" in df else None
     rsi = safe(last["rsi"])
 
     if close is None or prev_close is None:
