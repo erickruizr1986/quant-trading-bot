@@ -7,14 +7,18 @@ import pytz
 
 API_KEY = None
 
+# -----------------------------
+# DEBUG
+# -----------------------------
 DEBUG = True
-
 
 def log(msg):
     if DEBUG:
         print(msg)
 
-
+# -----------------------------
+# DATA
+# -----------------------------
 def get_data(symbol, tf):
 
     timespan = "hour" if tf == "hour" else "day"
@@ -35,7 +39,9 @@ def get_data(symbol, tf):
 
     return df
 
-
+# -----------------------------
+# INDICADORES
+# -----------------------------
 def add_ind(df):
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
@@ -43,18 +49,24 @@ def add_ind(df):
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
     return df
 
-
+# -----------------------------
+# VWAP
+# -----------------------------
 def calculate_vwap(df):
     df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     return df
 
-
+# -----------------------------
+# HORARIO
+# -----------------------------
 def valid_session():
     ny = pytz.timezone("America/New_York")
     now = datetime.now(ny)
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
-
+# -----------------------------
+# OPCIONES
+# -----------------------------
 def get_options_chain(symbol):
 
     url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=50&apiKey={API_KEY}"
@@ -62,7 +74,6 @@ def get_options_chain(symbol):
     r = requests.get(url).json()
 
     return r.get("results", [])
-
 
 def select_contract(chain, price, direction):
 
@@ -95,7 +106,9 @@ def select_contract(chain, price, direction):
         "expiry": best["expiration_date"]
     }
 
-
+# -----------------------------
+# TAKE PROFIT DINÁMICO
+# -----------------------------
 def dynamic_tp(score, prob):
 
     tp = 0.5
@@ -112,7 +125,9 @@ def dynamic_tp(score, prob):
 
     return int(max(0.25, min(tp, 1.0)) * 100)
 
-
+# -----------------------------
+# SIGNAL MEJORADO
+# -----------------------------
 def signal(symbol):
 
     log(f"\n🔍 ANALIZANDO {symbol}")
@@ -131,10 +146,13 @@ def signal(symbol):
     df = calculate_vwap(df)
 
     last = df.iloc[-2]
+    prev = df.iloc[-3]
 
     score = 0
 
-    # tendencia
+    # -----------------------------
+    # EMA200 (TENDENCIA)
+    # -----------------------------
     if last["close"] > last["ema200"]:
         direction = "CALL"
         score += 2
@@ -144,39 +162,63 @@ def signal(symbol):
         score -= 2
         log("✅ EMA200 PUT")
 
-    # breakout
-    high = df["close"].iloc[-15:].max()
-    low = df["close"].iloc[-15:].min()
+    # -----------------------------
+    # BREAKOUT INTELIGENTE
+    # -----------------------------
+    high = df["close"].iloc[-8:].max()
+    low = df["close"].iloc[-8:].min()
 
     if last["close"] > high:
         score += 2
-        log("✅ BREAKOUT UP")
+        log("✅ BREAKOUT FUERTE UP")
+
     elif last["close"] < low:
         score -= 2
-        log("✅ BREAKOUT DOWN")
-    else:
-        log("❌ NO BREAKOUT")
-        return None
+        log("✅ BREAKOUT FUERTE DOWN")
 
-    # volumen
+    else:
+        # breakout suave
+        if direction == "CALL" and last["close"] > prev["close"]:
+            score += 1
+            log("⚠️ MOMENTUM CALL")
+
+        elif direction == "PUT" and last["close"] < prev["close"]:
+            score -= 1
+            log("⚠️ MOMENTUM PUT")
+
+        else:
+            log("❌ SIN MOMENTUM")
+            return None
+
+    # -----------------------------
+    # VOLUMEN
+    # -----------------------------
     if last["volume"] > df["volume"].rolling(20).mean().iloc[-1]:
         log("✅ VOLUMEN OK")
     else:
         log("❌ VOLUMEN BAJO")
         return None
 
+    # -----------------------------
     # RSI
+    # -----------------------------
     if direction == "CALL" and 50 <= last["rsi"] <= 70:
         score += 1
+        log("✅ RSI CALL")
+
     elif direction == "PUT" and 30 <= last["rsi"] <= 50:
         score -= 1
+        log("✅ RSI PUT")
 
-    log(f"🎯 SCORE: {score}")
+    log(f"🎯 SCORE FINAL: {score}")
 
     if abs(score) < 3:
         log("❌ SCORE BAJO")
         return None
 
+    # -----------------------------
+    # OPCIONES
+    # -----------------------------
     chain = get_options_chain(symbol)
     contract = select_contract(chain, last["close"], direction)
 
