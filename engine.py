@@ -5,7 +5,7 @@ from datetime import datetime
 import pytz
 import math
 
-# 🔥 IMPORT IB SEGURO
+# 🔥 IB opcional
 try:
     from ib_options import get_best_option_ib
     IB_AVAILABLE = True
@@ -31,13 +31,20 @@ def safe(x):
         return None
 
 # -----------------------------
-# DATA
+# DATA (ROBUSTA)
 # -----------------------------
 def get_data(symbol, interval, period):
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False)
+        df = yf.download(
+            symbol,
+            period=period,
+            interval=interval,
+            progress=False,
+            threads=False
+        )
 
-        if df is None or len(df) < 30:
+        if df is None or len(df) < 5:
+            log(f"❌ DATA INSUFICIENTE ({symbol})")
             return None
 
         df = df.reset_index()
@@ -50,7 +57,8 @@ def get_data(symbol, interval, period):
 
         return df
 
-    except:
+    except Exception as e:
+        log(f"❌ ERROR DATA: {e}")
         return None
 
 # -----------------------------
@@ -66,7 +74,7 @@ def valid_session():
     if (h == 9 and m >= 30) or h == 10:
         return True
 
-    if h >= 14 and h < 16:
+    if 14 <= h < 16:
         return True
 
     return False
@@ -127,7 +135,7 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # 🔥 BIAS DAILY (CORREGIDO)
+    # BIAS DAILY
     # -----------------------------
     d = get_data(symbol, "1d", "2mo")
 
@@ -142,32 +150,37 @@ def signal(symbol):
             log(f"📊 BIAS DAILY: {bias}")
 
     # -----------------------------
-    # 🔥 FALLBACK BIAS
+    # FALLBACK BIAS ROBUSTO
     # -----------------------------
     if bias is None:
         log("⚠️ FALLBACK BIAS INTRADÍA")
 
         temp = get_data(symbol, "1h", "5d")
 
-        if temp is not None:
-            last = safe(temp.iloc[-2]["close"])
-            prev = safe(temp.iloc[-3]["close"])
+        if temp is not None and len(temp) >= 3:
+
+            last = safe(temp.iloc[-1]["close"])
+            prev = safe(temp.iloc[-2]["close"])
 
             if last is not None and prev is not None:
                 bias = "CALL" if last > prev else "PUT"
                 log(f"📊 BIAS FALLBACK: {bias}")
+            else:
+                log("❌ FALLBACK SIN DATOS VALIDOS")
+        else:
+            log("❌ FALLBACK SIN DATA SUFICIENTE")
 
     if bias is None:
         log("❌ SIN BIAS FINAL")
         return None
 
     # -----------------------------
-    # INTRADIA
+    # INTRADÍA
     # -----------------------------
     df = get_data(symbol, "1h", "10d")
 
     if df is None:
-        log("❌ SIN DATA")
+        log("❌ SIN DATA INTRADIA")
         return None
 
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
@@ -231,7 +244,7 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # CLASIFICACION
+    # CLASIFICACIÓN
     # -----------------------------
     if abs(score) >= 3:
         strength = "FUERTE"
@@ -243,7 +256,7 @@ def signal(symbol):
     direction = "CALL" if score > 0 else "PUT"
 
     # -----------------------------
-    # 🔥 OPTIONS (IB o fallback)
+    # OPTIONS (IB o fallback)
     # -----------------------------
     if IB_AVAILABLE:
         strike, expiry = get_best_option_ib(symbol, close, direction)
