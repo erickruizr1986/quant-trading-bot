@@ -1,5 +1,4 @@
 import yfinance as yf
-import pandas as pd
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime
@@ -29,13 +28,7 @@ def safe(x):
 # -----------------------------
 def get_data(symbol, interval, period):
     try:
-        df = yf.download(
-            symbol,
-            period=period,
-            interval=interval,
-            progress=False,
-            threads=False
-        )
+        df = yf.download(symbol, period=period, interval=interval, progress=False, threads=False)
 
         if df is None or len(df) < 30:
             return None
@@ -51,18 +44,11 @@ def get_data(symbol, interval, period):
         return df
 
     except Exception as e:
-        log(f"❌ ERROR DATA: {e}")
+        log(f"ERROR DATA: {e}")
         return None
 
 # -----------------------------
-# VWAP
-# -----------------------------
-def add_vwap(df):
-    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
-    return df
-
-# -----------------------------
-# HORARIO PRO (ALTO VOLUMEN)
+# HORARIO PRO
 # -----------------------------
 def valid_session():
     ny = pytz.timezone("America/New_York")
@@ -71,69 +57,85 @@ def valid_session():
     h = now.hour
     m = now.minute
 
-    # apertura
     if (h == 9 and m >= 30) or (h == 10):
         return True
 
-    # power hour
     if h >= 14 and h < 16:
         return True
 
     return False
 
 # -----------------------------
-# ANALISIS DE VELAS
+# VELA
 # -----------------------------
-def candle_strength(candle):
+def candle_strength(c):
 
-    o = safe(candle["open"])
-    c = safe(candle["close"])
-    h = safe(candle["high"])
-    l = safe(candle["low"])
+    o = safe(c["open"])
+    c_ = safe(c["close"])
+    h = safe(c["high"])
+    l = safe(c["low"])
 
-    if None in [o, c, h, l]:
+    if None in [o, c_, h, l]:
         return None
 
-    body = abs(c - o)
-    range_total = h - l
+    body = abs(c_ - o)
+    rng = h - l
 
-    if range_total == 0:
-        return 0
+    if rng == 0:
+        return None
 
-    strength = body / range_total
+    strength = body / rng
 
-    return strength, c > o  # fuerza + dirección
+    return strength, c_ > o
+
+# -----------------------------
+# CAPITAL
+# -----------------------------
+def position_size(strength, capital=1000):
+
+    if strength == "FUERTE":
+        return round(capital * 0.12, 2)
+    elif strength == "MEDIA":
+        return round(capital * 0.07, 2)
+    else:
+        return round(capital * 0.03, 2)
+
+def take_profit(score):
+
+    if abs(score) >= 3:
+        return "40%-80%"
+    elif abs(score) == 2:
+        return "25%-50%"
+    else:
+        return "15%-30%"
 
 # -----------------------------
 # SIGNAL
 # -----------------------------
 def signal(symbol):
 
-    log(f"\n🔍 ANALIZANDO {symbol}")
+    log(f"\nANALIZANDO {symbol}")
 
     if not valid_session():
-        log("⏰ FUERA DE HORARIO PRO")
         return None
 
     # -----------------------------
-    # BIAS BASE
+    # BIAS
     # -----------------------------
-    d1 = get_data(symbol, "1d", "2mo")
+    d = get_data(symbol, "1d", "2mo")
+
     bias = None
 
-    if d1 is not None:
-        last_close = safe(d1.iloc[-1]["close"])
-        avg_close = safe(d1["close"].tail(20).mean())
+    if d is not None:
+        last = safe(d.iloc[-1]["close"])
+        avg = safe(d["close"].tail(20).mean())
 
-        if last_close and avg_close:
-            bias = "CALL" if last_close > avg_close else "PUT"
-            log(f"📊 BIAS DAILY: {bias}")
+        if last and avg:
+            bias = "CALL" if last > avg else "PUT"
 
-    # fallback
     if bias is None:
-        log("⚠️ FALLBACK INTRADÍA")
-
         temp = get_data(symbol, "1h", "5d")
+
         if temp is None:
             return None
 
@@ -146,7 +148,7 @@ def signal(symbol):
             return None
 
     # -----------------------------
-    # INTRADÍA
+    # INTRADIA
     # -----------------------------
     df = get_data(symbol, "1h", "10d")
 
@@ -155,82 +157,55 @@ def signal(symbol):
 
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
-    df = add_vwap(df)
 
     last = df.iloc[-2]
     prev = df.iloc[-3]
 
     close = safe(last["close"])
     ema20 = safe(last["ema20"])
-    vwap = safe(last["vwap"])
+    prev_close = safe(prev["close"])
     volume = safe(last["volume"])
     vol_avg = safe(df["volume"].rolling(20).mean().iloc[-1])
     rsi = safe(last["rsi"])
 
-    if None in [close, ema20, vwap, volume, vol_avg, rsi]:
+    if None in [close, ema20, prev_close, volume, vol_avg, rsi]:
         return None
 
     score = 0
-    direction = bias
 
-    # -----------------------------
-    # 🔥 ANALISIS DE VELA
-    # -----------------------------
-    strength_data = candle_strength(last)
-
-    if strength_data:
-        strength, bullish = strength_data
-
+    # vela
+    cs = candle_strength(last)
+    if cs:
+        strength, bullish = cs
         if bullish:
             score += 1
-            log("🟢 VELA ALCISTA")
         else:
             score -= 1
-            log("🔴 VELA BAJISTA")
 
         if strength > 0.6:
             score += 1 if bullish else -1
-            log("🔥 VELA FUERTE")
 
-    # -----------------------------
-    # EMA20 (flexible)
-    # -----------------------------
-    if direction == "CALL":
-        if close > ema20:
-            score += 1
-        else:
-            log("⚠️ EMA20 NO IDEAL")
-    else:
-        if close < ema20:
-            score -= 1
-        else:
-            log("⚠️ EMA20 NO IDEAL")
-
-    # -----------------------------
-    # VWAP
-    # -----------------------------
-    if direction == "CALL" and close > vwap:
+    # momentum
+    if close > prev_close:
         score += 1
-    elif direction == "PUT" and close < vwap:
+    else:
         score -= 1
 
-    # -----------------------------
-    # VOLUMEN (más permisivo)
-    # -----------------------------
+    # ema
+    if bias == "CALL" and close > ema20:
+        score += 1
+    elif bias == "PUT" and close < ema20:
+        score -= 1
+
+    # volumen
     if volume > vol_avg * 0.6:
-        score += 1 if direction == "CALL" else -1
-    else:
-        log("⚠️ VOLUMEN BAJO")
+        score += 1 if bias == "CALL" else -1
 
-    # -----------------------------
-    # RSI
-    # -----------------------------
-    if direction == "CALL" and rsi > 50:
+    # rsi
+    if bias == "CALL" and rsi > 50:
         score += 1
-    elif direction == "PUT" and rsi < 50:
+    elif bias == "PUT" and rsi < 50:
         score -= 1
-
-    log(f"🎯 SCORE: {score}")
 
     if abs(score) < 1:
         return None
@@ -242,14 +217,8 @@ def signal(symbol):
     else:
         strength_label = "DEBIL"
 
-    # -----------------------------
-    # PROYECCION (CLAVE)
-    # -----------------------------
-    prediction = "CALL" if score > 0 else "PUT"
+    direction = "CALL" if score > 0 else "PUT"
 
-    # -----------------------------
-    # STRIKE + EXPIRY
-    # -----------------------------
     strike = round(close)
 
     ny = pytz.timezone("America/New_York")
@@ -262,15 +231,20 @@ def signal(symbol):
     else:
         expiry = "1-2DTE"
 
-    log("🚀 SIGNAL OK")
+    size = position_size(strength_label)
+    tp = take_profit(score)
+
+    log("SIGNAL OK")
 
     return {
         "symbol": symbol,
-        "direction": prediction,
+        "direction": direction,
         "price": round(close, 2),
         "score": score,
         "strength": strength_label,
         "strike": strike,
         "expiry": expiry,
-        "premium": 1.2
+        "size": size,
+        "tp": tp,
+        "sl": "-25%"
     }
