@@ -5,12 +5,8 @@ from datetime import datetime
 import pytz
 import math
 
-# IB opcional seguro
-try:
-    from ib_options import get_best_option_ib
-    IB_AVAILABLE = True
-except:
-    IB_AVAILABLE = False
+# 🔥 IB DESACTIVADO (evita errores en cloud)
+IB_AVAILABLE = False
 
 DEBUG = True
 
@@ -40,7 +36,7 @@ def get_data(symbol, interval, period):
         if df is None or df.empty:
             return None
 
-        # FIX columnas tuple
+        # 🔥 FIX columnas tuple (yfinance bug)
         if hasattr(df.columns, "levels"):
             df.columns = [c[0] for c in df.columns]
 
@@ -71,7 +67,8 @@ def get_data(symbol, interval, period):
 
         return df
 
-    except:
+    except Exception as e:
+        log(f"❌ ERROR DATA: {e}")
         return None
 
 # -----------------------------
@@ -80,7 +77,20 @@ def get_data(symbol, interval, period):
 def valid_session():
     ny = pytz.timezone("America/New_York")
     now = datetime.now(ny)
+
     return (now.hour == 9 and now.minute >= 30) or (10 <= now.hour < 16)
+
+# -----------------------------
+# TAKE PROFIT DINÁMICO (FIX)
+# -----------------------------
+def dynamic_tp(score):
+
+    if abs(score) >= 2:
+        return "40%-80%"
+    elif abs(score) == 1:
+        return "20%-40%"
+    else:
+        return "10%-20%"
 
 # -----------------------------
 # SIGNAL
@@ -93,9 +103,9 @@ def signal(symbol):
         return None
 
     # =============================
-    # BIAS
+    # BIAS SIMPLE (estable)
     # =============================
-    bias = None
+    bias = "CALL"
 
     d = get_data(symbol, "1d", "2mo")
 
@@ -106,8 +116,7 @@ def signal(symbol):
         if last is not None and avg is not None:
             bias = "CALL" if last > avg else "PUT"
 
-    if bias is None:
-        bias = "CALL"
+    log(f"📊 BIAS: {bias}")
 
     # =============================
     # INTRADÍA
@@ -129,26 +138,25 @@ def signal(symbol):
     if close is None or prev_close is None:
         return None
 
+    # =============================
+    # SCORE SIMPLE Y ESTABLE
+    # =============================
     score = 1 if close > prev_close else -1
 
     direction = "CALL" if score > 0 else "PUT"
 
     # =============================
-    # OPTIONS (IB seguro)
+    # CONTRATO (SIN IB)
     # =============================
-    try:
-        if IB_AVAILABLE:
-            strike, expiry = get_best_option_ib(symbol, close, direction)
-        else:
-            raise Exception()
-    except:
-        strike = round(close)
-        expiry = "N/A"
+    strike = round(close)
+    expiry = "N/A"
 
     # =============================
     # PREMIUM (FIX ERROR)
     # =============================
     premium = round(close * 0.02, 2)
+
+    tp = dynamic_tp(score)
 
     log("🚀 SIGNAL OK")
 
@@ -159,5 +167,6 @@ def signal(symbol):
         "strike": strike,
         "expiry": expiry,
         "premium": premium,
-        "score": score
+        "score": score,
+        "tp": tp
     }
