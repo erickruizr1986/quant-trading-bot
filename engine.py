@@ -68,17 +68,18 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# SIGNAL PRO
+# SIGNAL PRO REAL
 # -----------------------------
 def signal(symbol):
 
     log(f"\n🔍 ANALIZANDO {symbol}")
 
     if not valid_session():
+        log("❌ FUERA DE HORARIO")
         return None
 
     # -----------------------------
-    # DAILY CONTEXTO
+    # CONTEXTO DAILY
     # -----------------------------
     d1 = get_data(symbol, "1d", "3mo")
 
@@ -92,6 +93,7 @@ def signal(symbol):
     daily_ema = safe(d1.iloc[-1]["ema200"])
 
     if None in [daily_close, daily_ema]:
+        log("❌ DATA DAILY INVALIDA")
         return None
 
     if daily_close > daily_ema:
@@ -118,6 +120,7 @@ def signal(symbol):
         last = h1.iloc[-2]
         prev = h1.iloc[-3]
     except:
+        log("❌ ERROR INDEX")
         return None
 
     close = safe(last["close"])
@@ -129,14 +132,10 @@ def signal(symbol):
     rsi = safe(last["rsi"])
 
     if None in [close, ema20, prev_close, vwap, volume, vol_avg, rsi]:
-        log("❌ DATA INVALIDA")
+        log("❌ DATA INVALIDA (NaN)")
         return None
 
     score = 0
-
-    # -----------------------------
-    # FILTRO DIRECCIÓN
-    # -----------------------------
     direction = bias
 
     # -----------------------------
@@ -147,6 +146,7 @@ def signal(symbol):
     elif direction == "PUT" and close < ema20:
         score -= 1
     else:
+        log("❌ EMA20 NO ALINEADO")
         return None
 
     # -----------------------------
@@ -157,10 +157,11 @@ def signal(symbol):
     elif direction == "PUT" and close < prev_close:
         score -= 1
     else:
+        log("❌ SIN MOMENTUM")
         return None
 
     # -----------------------------
-    # VWAP (institucional)
+    # VWAP
     # -----------------------------
     if direction == "CALL" and close > vwap:
         score += 1
@@ -173,6 +174,7 @@ def signal(symbol):
     if volume > vol_avg * 0.8:
         score += 1 if direction == "CALL" else -1
     else:
+        log("❌ VOLUMEN BAJO")
         return None
 
     # -----------------------------
@@ -185,8 +187,19 @@ def signal(symbol):
 
     log(f"🎯 SCORE: {score}")
 
+    # -----------------------------
+    # FILTRO FINAL + FUERTE / MEDIA
+    # -----------------------------
     if abs(score) < 2:
+        log("❌ SIN EDGE")
         return None
+
+    strength = "FUERTE" if abs(score) >= 3 else "MEDIA"
+
+    if strength == "MEDIA":
+        log("⚠️ SEÑAL MEDIA (AGRESIVA)")
+    else:
+        log("🔥 SEÑAL FUERTE")
 
     log("🚀 SIGNAL PRO OK")
 
@@ -195,6 +208,7 @@ def signal(symbol):
         "direction": direction,
         "price": round(close, 2),
         "score": score,
+        "strength": strength,
         "strike": round(close),
         "expiry": "0DTE",
         "premium": 1.2
