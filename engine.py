@@ -69,7 +69,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# SIGNAL FINAL (BLINDADO)
+# SIGNAL FINAL
 # -----------------------------
 def signal(symbol):
 
@@ -96,34 +96,45 @@ def signal(symbol):
             pass
 
     # -----------------------------
-    # FALLBACK INTRADÍA
+    # FALLBACK INTRADÍA ROBUSTO
     # -----------------------------
     if bias is None:
         log("⚠️ FALLBACK INTRADÍA")
 
         h1_temp = get_data(symbol, "1h", "5d")
+
         if h1_temp is None:
+            log("❌ SIN DATA TOTAL")
             return None
 
         try:
             last = safe(h1_temp.iloc[-2]["close"])
             avg = safe(h1_temp["close"].tail(20).mean())
 
+            # 🔥 fallback inteligente
             if last is None or avg is None:
-                log("❌ FALLBACK DATA INVALIDA")
-                return None
+                log("⚠️ DATA INCOMPLETA → USANDO MOMENTUM SIMPLE")
 
-            bias = "CALL" if last > avg else "PUT"
+                prev = safe(h1_temp.iloc[-3]["close"])
+
+                if prev is None or last is None:
+                    return None
+
+                bias = "CALL" if last > prev else "PUT"
+
+            else:
+                bias = "CALL" if last > avg else "PUT"
 
         except:
             return None
 
     # -----------------------------
-    # INTRADÍA
+    # INTRADÍA PRINCIPAL
     # -----------------------------
     h1 = get_data(symbol, "1h", "10d")
 
     if h1 is None:
+        log("❌ SIN DATA INTRADIA")
         return None
 
     h1["ema20"] = EMAIndicator(h1["close"], 20).ema_indicator()
