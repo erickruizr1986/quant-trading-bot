@@ -5,28 +5,21 @@ from ta.momentum import RSIIndicator
 from datetime import datetime
 import pytz
 
+API_KEY = None
+
 DEBUG = True
+
 
 def log(msg):
     if DEBUG:
         print(msg)
 
-API_KEY = None
 
-
-# -----------------------------
-# DATA
-# -----------------------------
 def get_data(symbol, tf):
 
-    if tf == "hour":
-        timespan = "hour"
-    elif tf == "day":
-        timespan = "day"
-    elif tf == "week":
-        timespan = "week"
+    timespan = "hour" if tf == "hour" else "day"
 
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=200&apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/{timespan}/2025-01-01/2026-12-31?adjusted=true&sort=desc&limit=150&apiKey={API_KEY}"
 
     r = requests.get(url).json()
 
@@ -36,7 +29,6 @@ def get_data(symbol, tf):
     df = pd.DataFrame(r["results"]).sort_values("t")
 
     df["close"] = df["c"]
-    df["open"] = df["o"]
     df["high"] = df["h"]
     df["low"] = df["l"]
     df["volume"] = df["v"]
@@ -44,56 +36,25 @@ def get_data(symbol, tf):
     return df
 
 
-# -----------------------------
-# INDICADORES
-# -----------------------------
 def add_ind(df):
-
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["ema40"] = EMAIndicator(df["close"], 40).ema_indicator()
     df["ema200"] = EMAIndicator(df["close"], 200).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
-
     return df
 
 
-# -----------------------------
-# VWAP
-# -----------------------------
 def calculate_vwap(df):
-
     df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     return df
 
 
-# -----------------------------
-# HORARIO
-# -----------------------------
 def valid_session():
-
     ny = pytz.timezone("America/New_York")
     now = datetime.now(ny)
-
-    h = now.hour
-    m = now.minute
-
-    return (h > 9 or (h == 9 and m >= 30)) and h < 16
+    return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 
-# -----------------------------
-# FILTRO NOTICIAS (MANUAL)
-# -----------------------------
-def news_filter():
-
-    # cambia esto manualmente en días de noticias fuertes
-    HIGH_IMPACT_NEWS = False
-
-    return not HIGH_IMPACT_NEWS
-
-
-# -----------------------------
-# OPCIONES
-# -----------------------------
 def get_options_chain(symbol):
 
     url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=50&apiKey={API_KEY}"
@@ -106,22 +67,21 @@ def get_options_chain(symbol):
 def select_contract(chain, price, direction):
 
     best = None
-    min_diff = 999
+    diff_min = 999
 
     for c in chain:
         try:
             strike = float(c["strike_price"])
-            typ = c["contract_type"]
 
-            if direction == "CALL" and typ != "call":
+            if direction == "CALL" and c["contract_type"] != "call":
                 continue
-            if direction == "PUT" and typ != "put":
+            if direction == "PUT" and c["contract_type"] != "put":
                 continue
 
             diff = abs(strike - price)
 
-            if diff < min_diff:
-                min_diff = diff
+            if diff < diff_min:
+                diff_min = diff
                 best = c
 
         except:
@@ -136,9 +96,6 @@ def select_contract(chain, price, direction):
     }
 
 
-# -----------------------------
-# TAKE PROFIT DINÁMICO
-# -----------------------------
 def dynamic_tp(score, prob):
 
     tp = 0.5
@@ -152,209 +109,82 @@ def dynamic_tp(score, prob):
 
     if prob > 0.7:
         tp += 0.1
-    elif prob < 0.6:
-        tp -= 0.1
 
     return int(max(0.25, min(tp, 1.0)) * 100)
 
 
-# -----------------------------
-# SIGNAL PRO
-# -----------------------------
 def signal(symbol):
 
+    log(f"\n🔍 ANALIZANDO {symbol}")
+
     if not valid_session():
-        log(f"{symbol} ❌ FUERA DE HORARIO")
+        log("❌ FUERA DE HORARIO")
         return None
 
-    if not news_filter():
-        log(f"{symbol} ❌ BLOQUEADO POR NOTICIAS")
+    df = get_data(symbol, "hour")
+
+    if df is None:
+        log("❌ SIN DATA")
         return None
 
-    h1 = get_data(symbol, "hour")
-    d1 = get_data(symbol, "day")
-    w1 = get_data(symbol, "week")
+    df = add_ind(df)
+    df = calculate_vwap(df)
 
-    if h1 is None or d1 is None or w1 is None:
-        log(f"{symbol} ❌ DATA ERROR")
-        return None
-
-    h1 = add_ind(h1)
-    d1 = add_ind(d1)
-    w1 = add_ind(w1)
-
-    h1 = calculate_vwap(h1)
-
-    last = h1.iloc[-2]
+    last = df.iloc[-2]
 
     score = 0
 
-    # -----------------------------
-    # EMA 200
-    # -----------------------------
-    if last["close"] > d1["ema200"].iloc[-1]:
+    # tendencia
+    if last["close"] > last["ema200"]:
         direction = "CALL"
         score += 2
-        log(f"{symbol} ✅ EMA200 CALL")
-    elif last["close"] < d1["ema200"].iloc[-1]:
+        log("✅ EMA200 CALL")
+    else:
         direction = "PUT"
         score -= 2
-        log(f"{symbol} ✅ EMA200 PUT")
-    else:
-        log(f"{symbol} ❌ EMA200 NEUTRO")
-        return None
+        log("✅ EMA200 PUT")
 
-    # -----------------------------
-    # SEMANAL
-    # -----------------------------
-    if direction == "CALL" and w1["close"].iloc[-1] > w1["ema20"].iloc[-1]:
-        score += 1
-        log(f"{symbol} ✅ SEMANAL CALL")
-    elif direction == "PUT" and w1["close"].iloc[-1] < w1["ema20"].iloc[-1]:
-        score -= 1
-        log(f"{symbol} ✅ SEMANAL PUT")
-    else:
-        log(f"{symbol} ❌ SEMANAL NO ALINEADO")
-
-    # -----------------------------
-    # VWAP
-    # -----------------------------
-    if direction == "CALL":
-        if last["close"] > last["vwap"]:
-            score += 1
-            log(f"{symbol} ✅ VWAP CALL")
-        else:
-            log(f"{symbol} ❌ VWAP FALLÓ")
-            return None
-
-    if direction == "PUT":
-        if last["close"] < last["vwap"]:
-            score -= 1
-            log(f"{symbol} ✅ VWAP PUT")
-        else:
-            log(f"{symbol} ❌ VWAP FALLÓ")
-            return None
-
-    # -----------------------------
-    # BREAKOUT
-    # -----------------------------
-    high = h1["close"].iloc[-15:].max()
-    low = h1["close"].iloc[-15:].min()
+    # breakout
+    high = df["close"].iloc[-15:].max()
+    low = df["close"].iloc[-15:].min()
 
     if last["close"] > high:
         score += 2
-        log(f"{symbol} ✅ BREAKOUT UP")
+        log("✅ BREAKOUT UP")
     elif last["close"] < low:
         score -= 2
-        log(f"{symbol} ✅ BREAKOUT DOWN")
+        log("✅ BREAKOUT DOWN")
     else:
-        log(f"{symbol} ❌ NO BREAKOUT")
+        log("❌ NO BREAKOUT")
         return None
 
-    # -----------------------------
-    # VOLUMEN
-    # -----------------------------
-    if last["volume"] > h1["volume"].rolling(20).mean().iloc[-1]:
-        log(f"{symbol} ✅ VOLUMEN OK")
+    # volumen
+    if last["volume"] > df["volume"].rolling(20).mean().iloc[-1]:
+        log("✅ VOLUMEN OK")
     else:
-        log(f"{symbol} ❌ VOLUMEN BAJO")
+        log("❌ VOLUMEN BAJO")
         return None
 
-    # -----------------------------
     # RSI
-    # -----------------------------
     if direction == "CALL" and 50 <= last["rsi"] <= 70:
         score += 1
-        log(f"{symbol} ✅ RSI CALL")
     elif direction == "PUT" and 30 <= last["rsi"] <= 50:
         score -= 1
-        log(f"{symbol} ✅ RSI PUT")
-    else:
-        log(f"{symbol} ❌ RSI NO VALIDO")
 
-    # -----------------------------
-    # SCORE FINAL
-    # -----------------------------
-    log(f"{symbol} 🎯 SCORE FINAL: {score}")
+    log(f"🎯 SCORE: {score}")
 
-    if abs(score) < 4:
-        log(f"{symbol} ❌ SCORE INSUFICIENTE")
+    if abs(score) < 3:
+        log("❌ SCORE BAJO")
         return None
 
-    # -----------------------------
-    # OPCIONES
-    # -----------------------------
     chain = get_options_chain(symbol)
     contract = select_contract(chain, last["close"], direction)
 
     if not contract:
-        log(f"{symbol} ❌ SIN CONTRATO")
+        log("❌ SIN OPCIÓN")
         return None
 
-    log(f"{symbol} 🚀 SIGNAL LISTA")
-
-    return {
-        "symbol": symbol,
-        "direction": direction,
-        "price": round(last["close"], 2),
-        "score": score,
-        "strike": contract["strike"],
-        "expiry": contract["expiry"],
-        "premium": 1.2
-    }
-    # -----------------------------
-    # CONTEXTO SEMANAL
-    # -----------------------------
-    if direction == "CALL" and w1["close"].iloc[-1] > w1["ema20"].iloc[-1]:
-        score += 1
-    elif direction == "PUT" and w1["close"].iloc[-1] < w1["ema20"].iloc[-1]:
-        score -= 1
-
-    # -----------------------------
-    # VWAP
-    # -----------------------------
-    if direction == "CALL" and last["close"] > last["vwap"]:
-        score += 1
-    elif direction == "PUT" and last["close"] < last["vwap"]:
-        score -= 1
-
-    # -----------------------------
-    # BREAKOUT
-    # -----------------------------
-    high = h1["close"].iloc[-15:].max()
-    low = h1["close"].iloc[-15:].min()
-
-    if last["close"] > high:
-        score += 2
-    elif last["close"] < low:
-        score -= 2
-    else:
-        return None
-
-    # -----------------------------
-    # VOLUMEN
-    # -----------------------------
-    if last["volume"] < h1["volume"].rolling(20).mean().iloc[-1]:
-        return None
-
-    # -----------------------------
-    # RSI
-    # -----------------------------
-    if 50 <= last["rsi"] <= 70:
-        score += 1
-    elif 30 <= last["rsi"] <= 50:
-        score -= 1
-
-    # filtro final
-    if abs(score) < 4:
-        return None
-
-    # opciones
-    chain = get_options_chain(symbol)
-    contract = select_contract(chain, last["close"], direction)
-
-    if not contract:
-        return None
+    log("🚀 SIGNAL OK")
 
     return {
         "symbol": symbol,
