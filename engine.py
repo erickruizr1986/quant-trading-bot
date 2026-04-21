@@ -25,7 +25,7 @@ def get_data(symbol, interval, period):
             progress=False
         )
 
-        if df is None or len(df) < 50:
+        if df is None or len(df) < 100:
             return None
 
         df = df.reset_index()
@@ -75,25 +75,24 @@ def signal(symbol):
     log(f"\n🔍 ANALIZANDO {symbol}")
 
     if not valid_session():
-        log("❌ FUERA DE HORARIO")
         return None
 
     # -----------------------------
-    # CONTEXTO DAILY
+    # CONTEXTO DAILY (🔥 FIX AQUÍ)
     # -----------------------------
-    d1 = get_data(symbol, "1d", "3mo")
+    d1 = get_data(symbol, "1d", "6mo")
 
     if d1 is None:
         log("❌ SIN DATA DAILY")
         return None
 
-    d1["ema200"] = EMAIndicator(d1["close"], 200).ema_indicator()
+    d1["ema100"] = EMAIndicator(d1["close"], 100).ema_indicator()
 
     daily_close = safe(d1.iloc[-1]["close"])
-    daily_ema = safe(d1.iloc[-1]["ema200"])
+    daily_ema = safe(d1.iloc[-1]["ema100"])
 
     if None in [daily_close, daily_ema]:
-        log("❌ DATA DAILY INVALIDA")
+        log("❌ DATA DAILY INVALIDA (EMA)")
         return None
 
     if daily_close > daily_ema:
@@ -120,7 +119,6 @@ def signal(symbol):
         last = h1.iloc[-2]
         prev = h1.iloc[-3]
     except:
-        log("❌ ERROR INDEX")
         return None
 
     close = safe(last["close"])
@@ -132,54 +130,41 @@ def signal(symbol):
     rsi = safe(last["rsi"])
 
     if None in [close, ema20, prev_close, vwap, volume, vol_avg, rsi]:
-        log("❌ DATA INVALIDA (NaN)")
+        log("❌ DATA INVALIDA")
         return None
 
     score = 0
     direction = bias
 
-    # -----------------------------
-    # EMA20 (timing)
-    # -----------------------------
+    # EMA20
     if direction == "CALL" and close > ema20:
         score += 1
     elif direction == "PUT" and close < ema20:
         score -= 1
     else:
-        log("❌ EMA20 NO ALINEADO")
         return None
 
-    # -----------------------------
-    # MOMENTUM
-    # -----------------------------
+    # Momentum
     if direction == "CALL" and close > prev_close:
         score += 1
     elif direction == "PUT" and close < prev_close:
         score -= 1
     else:
-        log("❌ SIN MOMENTUM")
         return None
 
-    # -----------------------------
     # VWAP
-    # -----------------------------
     if direction == "CALL" and close > vwap:
         score += 1
     elif direction == "PUT" and close < vwap:
         score -= 1
 
-    # -----------------------------
-    # VOLUMEN
-    # -----------------------------
+    # Volumen
     if volume > vol_avg * 0.8:
         score += 1 if direction == "CALL" else -1
     else:
-        log("❌ VOLUMEN BAJO")
         return None
 
-    # -----------------------------
     # RSI
-    # -----------------------------
     if direction == "CALL" and rsi > 50:
         score += 1
     elif direction == "PUT" and rsi < 50:
@@ -187,19 +172,10 @@ def signal(symbol):
 
     log(f"🎯 SCORE: {score}")
 
-    # -----------------------------
-    # FILTRO FINAL + FUERTE / MEDIA
-    # -----------------------------
     if abs(score) < 2:
-        log("❌ SIN EDGE")
         return None
 
     strength = "FUERTE" if abs(score) >= 3 else "MEDIA"
-
-    if strength == "MEDIA":
-        log("⚠️ SEÑAL MEDIA (AGRESIVA)")
-    else:
-        log("🔥 SEÑAL FUERTE")
 
     log("🚀 SIGNAL PRO OK")
 
