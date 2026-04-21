@@ -1,84 +1,40 @@
-from ib_insync import *
+from ib_insync import IB, Stock, Option
+import asyncio
 
 ib = IB()
 
 def connect_ib():
-    if not ib.isConnected():
-        ib.connect('127.0.0.1', 7497, clientId=1)
-    return ib
-
+    try:
+        if not ib.isConnected():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            ib.connect('127.0.0.1', 7497, clientId=1)
+        return ib
+    except Exception as e:
+        print(f"IB ERROR: {e}")
+        return None
 
 def get_best_option_ib(symbol, price, direction):
 
     try:
         ib = connect_ib()
+        if ib is None:
+            return None, None
 
         stock = Stock(symbol, 'SMART', 'USD')
         ib.qualifyContracts(stock)
 
-        chains = ib.reqSecDefOptParams(
-            stock.symbol, '', stock.secType, stock.conId
-        )
+        chains = ib.reqSecDefOptParams(stock.symbol, '', stock.secType, stock.conId)
 
         chain = chains[0]
 
-        expirations = sorted(chain.expirations)
         strikes = sorted(chain.strikes)
+        expirations = sorted(chain.expirations)
 
-        exp = expirations[0]  # nearest expiry
+        strike = min(strikes, key=lambda x: abs(x - price))
+        expiry = expirations[0]
 
-        right = 'C' if direction == "CALL" else 'P'
-
-        candidates = []
-
-        for strike in strikes:
-
-            # limitar rango cercano al precio
-            if abs(strike - price) > price * 0.03:
-                continue
-
-            contract = Option(symbol, exp, strike, right, 'SMART')
-            ib.qualifyContracts(contract)
-
-            ticker = ib.reqMktData(contract, "", False, False)
-
-            ib.sleep(0.2)
-
-            if ticker.modelGreeks is None:
-                continue
-
-            delta = ticker.modelGreeks.delta
-            bid = ticker.bid
-            ask = ticker.ask
-
-            if bid is None or ask is None:
-                continue
-
-            spread = ask - bid
-
-            if delta is None:
-                continue
-
-            delta = abs(delta)
-
-            # 🎯 FILTRO PRO
-            if 0.55 <= delta <= 0.70 and spread < 0.15:
-
-                candidates.append({
-                    "strike": strike,
-                    "expiry": exp,
-                    "delta": delta,
-                    "spread": spread,
-                    "contract": contract
-                })
-
-        if not candidates:
-            return None, None
-
-        # elegir mejor por delta cercano a 0.6
-        best = sorted(candidates, key=lambda x: abs(x["delta"] - 0.6))[0]
-
-        return best["strike"], best["expiry"]
+        return strike, expiry
 
     except Exception as e:
         print(f"IB ERROR: {e}")
