@@ -4,14 +4,8 @@ from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime
 import pytz
-import requests
 import math
 
-API_KEY = None
-
-# -----------------------------
-# DEBUG
-# -----------------------------
 DEBUG = True
 
 def log(msg):
@@ -21,18 +15,17 @@ def log(msg):
 # -----------------------------
 # DATA
 # -----------------------------
-def get_data(symbol):
+def get_data(symbol, interval, period):
 
     try:
         df = yf.download(
             symbol,
-            period="10d",
-            interval="1h",
+            period=period,
+            interval=interval,
             progress=False
         )
 
         if df is None or len(df) < 50:
-            log(f"❌ DATA INSUFICIENTE YF ({symbol})")
             return None
 
         df = df.reset_index()
@@ -42,23 +35,29 @@ def get_data(symbol):
         df["low"] = df["Low"]
         df["volume"] = df["Volume"]
 
-        log(f"✅ DATA YAHOO OK ({symbol})")
-
         return df
 
-    except Exception as e:
-        log(f"❌ ERROR YFINANCE: {e}")
+    except:
         return None
 
 # -----------------------------
-# INDICADORES
+# VWAP
 # -----------------------------
-def add_ind(df):
-
-    df["ema200"] = EMAIndicator(df["close"], 200).ema_indicator()
-    df["rsi"] = RSIIndicator(df["close"], 14).rsi()
-
+def add_vwap(df):
+    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     return df
+
+# -----------------------------
+# SAFE FLOAT
+# -----------------------------
+def safe(x):
+    try:
+        v = float(x)
+        if math.isnan(v):
+            return None
+        return v
+    except:
+        return None
 
 # -----------------------------
 # HORARIO
@@ -69,179 +68,134 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# OPTIONS (OPCIONAL)
-# -----------------------------
-def get_options_chain(symbol):
-
-    if not API_KEY:
-        return []
-
-    url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=50&apiKey={API_KEY}"
-
-    try:
-        r = requests.get(url).json()
-    except:
-        return []
-
-    return r.get("results", [])
-
-def select_contract(chain, price, direction):
-
-    if not chain:
-        return {"strike": round(price), "expiry": "N/A"}
-
-    best = None
-    diff_min = 999
-
-    for c in chain:
-        try:
-            strike = float(c["strike_price"])
-
-            if direction == "CALL" and c["contract_type"] != "call":
-                continue
-            if direction == "PUT" and c["contract_type"] != "put":
-                continue
-
-            diff = abs(strike - price)
-
-            if diff < diff_min:
-                diff_min = diff
-                best = c
-
-        except:
-            continue
-
-    if not best:
-        return {"strike": round(price), "expiry": "N/A"}
-
-    return {
-        "strike": best["strike_price"],
-        "expiry": best["expiration_date"]
-    }
-
-# -----------------------------
-# SAFE FLOAT
-# -----------------------------
-def safe_float(x):
-    try:
-        v = float(x)
-        if math.isnan(v):
-            return None
-        return v
-    except:
-        return None
-
-# -----------------------------
-# SIGNAL
+# SIGNAL PRO
 # -----------------------------
 def signal(symbol):
 
     log(f"\n🔍 ANALIZANDO {symbol}")
 
     if not valid_session():
-        log("❌ FUERA DE HORARIO")
         return None
 
-    df = get_data(symbol)
+    # -----------------------------
+    # DAILY CONTEXTO
+    # -----------------------------
+    d1 = get_data(symbol, "1d", "3mo")
 
-    if df is None:
-        log("❌ SIN DATA")
+    if d1 is None:
+        log("❌ SIN DATA DAILY")
         return None
 
-    df = add_ind(df)
+    d1["ema200"] = EMAIndicator(d1["close"], 200).ema_indicator()
+
+    daily_close = safe(d1.iloc[-1]["close"])
+    daily_ema = safe(d1.iloc[-1]["ema200"])
+
+    if None in [daily_close, daily_ema]:
+        return None
+
+    if daily_close > daily_ema:
+        bias = "CALL"
+        log("📈 BIAS ALCISTA")
+    else:
+        bias = "PUT"
+        log("📉 BIAS BAJISTA")
+
+    # -----------------------------
+    # INTRADÍA
+    # -----------------------------
+    h1 = get_data(symbol, "1h", "10d")
+
+    if h1 is None:
+        log("❌ SIN DATA INTRADIA")
+        return None
+
+    h1["ema20"] = EMAIndicator(h1["close"], 20).ema_indicator()
+    h1["rsi"] = RSIIndicator(h1["close"], 14).rsi()
+    h1 = add_vwap(h1)
 
     try:
-        last = df.iloc[-2]
-        prev = df.iloc[-3]
+        last = h1.iloc[-2]
+        prev = h1.iloc[-3]
     except:
-        log("❌ ERROR INDEX")
         return None
 
-    # -----------------------------
-    # CONVERSION SEGURA
-    # -----------------------------
-    close = safe_float(last["close"])
-    ema200 = safe_float(last["ema200"])
-    prev_close = safe_float(prev["close"])
-    volume = safe_float(last["volume"])
-    vol_avg = safe_float(df["volume"].rolling(20).mean().iloc[-1])
-    rsi = safe_float(last["rsi"])
+    close = safe(last["close"])
+    ema20 = safe(last["ema20"])
+    prev_close = safe(prev["close"])
+    vwap = safe(last["vwap"])
+    volume = safe(last["volume"])
+    vol_avg = safe(h1["volume"].rolling(20).mean().iloc[-1])
+    rsi = safe(last["rsi"])
 
-    if None in [close, ema200, prev_close, volume, vol_avg, rsi]:
-        log("❌ DATA INVALIDA (NaN)")
+    if None in [close, ema20, prev_close, vwap, volume, vol_avg, rsi]:
+        log("❌ DATA INVALIDA")
         return None
 
     score = 0
 
     # -----------------------------
-    # TENDENCIA
+    # FILTRO DIRECCIÓN
     # -----------------------------
-    if close > ema200:
-        direction = "CALL"
-        score += 2
-        log("✅ EMA200 CALL")
+    direction = bias
+
+    # -----------------------------
+    # EMA20 (timing)
+    # -----------------------------
+    if direction == "CALL" and close > ema20:
+        score += 1
+    elif direction == "PUT" and close < ema20:
+        score -= 1
     else:
-        direction = "PUT"
-        score -= 2
-        log("✅ EMA200 PUT")
+        return None
 
     # -----------------------------
     # MOMENTUM
     # -----------------------------
     if direction == "CALL" and close > prev_close:
         score += 1
-        log("⚠️ MOMENTUM CALL")
-
     elif direction == "PUT" and close < prev_close:
         score -= 1
-        log("⚠️ MOMENTUM PUT")
-
     else:
-        log("❌ SIN MOMENTUM")
         return None
 
     # -----------------------------
-    # VOLUMEN (AJUSTADO)
+    # VWAP (institucional)
+    # -----------------------------
+    if direction == "CALL" and close > vwap:
+        score += 1
+    elif direction == "PUT" and close < vwap:
+        score -= 1
+
+    # -----------------------------
+    # VOLUMEN
     # -----------------------------
     if volume > vol_avg * 0.8:
-        log("⚠️ VOLUMEN ACEPTABLE")
+        score += 1 if direction == "CALL" else -1
     else:
-        log("❌ VOLUMEN BAJO")
         return None
 
     # -----------------------------
     # RSI
     # -----------------------------
-    if direction == "CALL" and 50 <= rsi <= 70:
+    if direction == "CALL" and rsi > 50:
         score += 1
-    elif direction == "PUT" and 30 <= rsi <= 50:
+    elif direction == "PUT" and rsi < 50:
         score -= 1
 
-    log(f"🎯 SCORE FINAL: {score}")
+    log(f"🎯 SCORE: {score}")
 
-    # -----------------------------
-    # SCORE AJUSTADO
-    # -----------------------------
     if abs(score) < 2:
-        log("❌ SCORE MUY BAJO")
         return None
-    else:
-        log("⚠️ SCORE ACEPTADO")
 
-    # -----------------------------
-    # OPCIONES
-    # -----------------------------
-    chain = get_options_chain(symbol)
-    contract = select_contract(chain, close, direction)
-
-    log("🚀 SIGNAL OK")
+    log("🚀 SIGNAL PRO OK")
 
     return {
         "symbol": symbol,
         "direction": direction,
         "price": round(close, 2),
         "score": score,
-        "strike": contract["strike"],
-        "expiry": contract["expiry"],
+        "strike": round(close),
+        "expiry": "0DTE",
         "premium": 1.2
     }
