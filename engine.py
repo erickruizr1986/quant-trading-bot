@@ -9,6 +9,9 @@ import math
 
 API_KEY = None
 
+# -----------------------------
+# DEBUG
+# -----------------------------
 DEBUG = True
 
 def log(msg):
@@ -23,7 +26,7 @@ def get_data(symbol):
     try:
         df = yf.download(
             symbol,
-            period="10d",  # 🔥 más data para evitar NaN
+            period="10d",
             interval="1h",
             progress=False
         )
@@ -66,7 +69,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# OPTIONS
+# OPTIONS (OPCIONAL)
 # -----------------------------
 def get_options_chain(symbol):
 
@@ -117,7 +120,7 @@ def select_contract(chain, price, direction):
     }
 
 # -----------------------------
-# VALIDADOR DE DATOS
+# SAFE FLOAT
 # -----------------------------
 def safe_float(x):
     try:
@@ -154,7 +157,9 @@ def signal(symbol):
         log("❌ ERROR INDEX")
         return None
 
-    # 🔥 VALIDACIÓN SEGURA
+    # -----------------------------
+    # CONVERSION SEGURA
+    # -----------------------------
     close = safe_float(last["close"])
     ema200 = safe_float(last["ema200"])
     prev_close = safe_float(prev["close"])
@@ -196,10 +201,10 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # VOLUMEN
+    # VOLUMEN (AJUSTADO)
     # -----------------------------
-    if volume > vol_avg:
-        log("✅ VOLUMEN OK")
+    if volume > vol_avg * 0.8:
+        log("⚠️ VOLUMEN ACEPTABLE")
     else:
         log("❌ VOLUMEN BAJO")
         return None
@@ -214,10 +219,18 @@ def signal(symbol):
 
     log(f"🎯 SCORE FINAL: {score}")
 
-    if abs(score) < 3:
-        log("❌ SCORE BAJO")
+    # -----------------------------
+    # SCORE AJUSTADO
+    # -----------------------------
+    if abs(score) < 2:
+        log("❌ SCORE MUY BAJO")
         return None
+    else:
+        log("⚠️ SCORE ACEPTADO")
 
+    # -----------------------------
+    # OPCIONES
+    # -----------------------------
     chain = get_options_chain(symbol)
     contract = select_contract(chain, close, direction)
 
