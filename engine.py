@@ -28,7 +28,7 @@ def safe(x):
 # -----------------------------
 def get_data(symbol, interval, period):
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False, threads=False)
+        df = yf.download(symbol, period=period, interval=interval, progress=False)
 
         if df is None or len(df) < 30:
             return None
@@ -43,12 +43,50 @@ def get_data(symbol, interval, period):
 
         return df
 
-    except Exception as e:
-        log(f"ERROR DATA: {e}")
+    except:
         return None
 
 # -----------------------------
-# HORARIO PRO
+# OPTIONS CHAIN REAL
+# -----------------------------
+def get_best_contract(symbol, price, direction):
+
+    try:
+        ticker = yf.Ticker(symbol)
+
+        expirations = ticker.options
+
+        if not expirations:
+            return round(price), "N/A"
+
+        exp = expirations[0]  # nearest expiry
+
+        chain = ticker.option_chain(exp)
+
+        if direction == "CALL":
+            df = chain.calls
+        else:
+            df = chain.puts
+
+        # filtro liquidez
+        df = df[df["volume"] > 10]
+        df = df[df["openInterest"] > 50]
+
+        if df.empty:
+            return round(price), exp
+
+        # strike más cercano al precio
+        df["diff"] = abs(df["strike"] - price)
+        best = df.sort_values("diff").iloc[0]
+
+        return best["strike"], exp
+
+    except Exception as e:
+        log(f"ERROR OPTIONS: {e}")
+        return round(price), "N/A"
+
+# -----------------------------
+# HORARIO
 # -----------------------------
 def valid_session():
     ny = pytz.timezone("America/New_York")
@@ -57,36 +95,13 @@ def valid_session():
     h = now.hour
     m = now.minute
 
-    if (h == 9 and m >= 30) or (h == 10):
+    if (h == 9 and m >= 30) or h == 10:
         return True
 
     if h >= 14 and h < 16:
         return True
 
     return False
-
-# -----------------------------
-# VELA
-# -----------------------------
-def candle_strength(c):
-
-    o = safe(c["open"])
-    c_ = safe(c["close"])
-    h = safe(c["high"])
-    l = safe(c["low"])
-
-    if None in [o, c_, h, l]:
-        return None
-
-    body = abs(c_ - o)
-    rng = h - l
-
-    if rng == 0:
-        return None
-
-    strength = body / rng
-
-    return strength, c_ > o
 
 # -----------------------------
 # CAPITAL
@@ -134,18 +149,7 @@ def signal(symbol):
             bias = "CALL" if last > avg else "PUT"
 
     if bias is None:
-        temp = get_data(symbol, "1h", "5d")
-
-        if temp is None:
-            return None
-
-        last = safe(temp.iloc[-2]["close"])
-        prev = safe(temp.iloc[-3]["close"])
-
-        if last and prev:
-            bias = "CALL" if last > prev else "PUT"
-        else:
-            return None
+        return None
 
     # -----------------------------
     # INTRADIA
@@ -173,35 +177,19 @@ def signal(symbol):
 
     score = 0
 
-    # vela
-    cs = candle_strength(last)
-    if cs:
-        strength, bullish = cs
-        if bullish:
-            score += 1
-        else:
-            score -= 1
-
-        if strength > 0.6:
-            score += 1 if bullish else -1
-
-    # momentum
     if close > prev_close:
         score += 1
     else:
         score -= 1
 
-    # ema
     if bias == "CALL" and close > ema20:
         score += 1
     elif bias == "PUT" and close < ema20:
         score -= 1
 
-    # volumen
     if volume > vol_avg * 0.6:
         score += 1 if bias == "CALL" else -1
 
-    # rsi
     if bias == "CALL" and rsi > 50:
         score += 1
     elif bias == "PUT" and rsi < 50:
@@ -211,27 +199,18 @@ def signal(symbol):
         return None
 
     if abs(score) >= 3:
-        strength_label = "FUERTE"
+        strength = "FUERTE"
     elif abs(score) == 2:
-        strength_label = "MEDIA"
+        strength = "MEDIA"
     else:
-        strength_label = "DEBIL"
+        strength = "DEBIL"
 
     direction = "CALL" if score > 0 else "PUT"
 
-    strike = round(close)
+    # 🔥 AQUÍ ESTÁ LA MAGIA REAL
+    strike, expiry = get_best_contract(symbol, close, direction)
 
-    ny = pytz.timezone("America/New_York")
-    now = datetime.now(ny)
-
-    if now.hour < 12:
-        expiry = "0DTE"
-    elif now.hour < 15:
-        expiry = "1DTE"
-    else:
-        expiry = "1-2DTE"
-
-    size = position_size(strength_label)
+    size = position_size(strength)
     tp = take_profit(score)
 
     log("SIGNAL OK")
@@ -241,7 +220,7 @@ def signal(symbol):
         "direction": direction,
         "price": round(close, 2),
         "score": score,
-        "strength": strength_label,
+        "strength": strength,
         "strike": strike,
         "expiry": expiry,
         "size": size,
