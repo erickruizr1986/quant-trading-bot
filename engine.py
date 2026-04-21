@@ -13,7 +13,7 @@ def log(msg):
         print(msg)
 
 # -----------------------------
-# DATA
+# DATA ROBUSTA
 # -----------------------------
 def get_data(symbol, interval, period):
 
@@ -22,10 +22,11 @@ def get_data(symbol, interval, period):
             symbol,
             period=period,
             interval=interval,
-            progress=False
+            progress=False,
+            threads=False
         )
 
-        if df is None or len(df) < 50:
+        if df is None or len(df) < 30:
             return None
 
         df = df.reset_index()
@@ -37,7 +38,8 @@ def get_data(symbol, interval, period):
 
         return df
 
-    except:
+    except Exception as e:
+        log(f"❌ ERROR DATA: {e}")
         return None
 
 # -----------------------------
@@ -48,7 +50,7 @@ def add_vwap(df):
     return df
 
 # -----------------------------
-# SAFE FLOAT
+# SAFE
 # -----------------------------
 def safe(x):
     try:
@@ -68,7 +70,7 @@ def valid_session():
     return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
 
 # -----------------------------
-# SIGNAL PRO REAL (SIN EMA DAILY)
+# SIGNAL FINAL ROBUSTO
 # -----------------------------
 def signal(symbol):
 
@@ -78,30 +80,51 @@ def signal(symbol):
         return None
 
     # -----------------------------
-    # 🔥 DAILY BIAS (SIN EMA)
+    # 🔥 INTENTO DAILY
     # -----------------------------
     d1 = get_data(symbol, "1d", "2mo")
 
-    if d1 is None:
-        log("❌ SIN DATA DAILY")
-        return None
+    bias = None
 
-    try:
-        last_close = safe(d1.iloc[-1]["close"])
-        avg_close = safe(d1["close"].tail(20).mean())
-    except:
-        return None
+    if d1 is not None:
 
-    if None in [last_close, avg_close]:
-        log("❌ DATA DAILY INVALIDA")
-        return None
+        try:
+            last_close = safe(d1.iloc[-1]["close"])
+            avg_close = safe(d1["close"].tail(20).mean())
 
-    if last_close > avg_close:
-        bias = "CALL"
-        log("📈 BIAS ALCISTA (PRICE ACTION)")
-    else:
-        bias = "PUT"
-        log("📉 BIAS BAJISTA (PRICE ACTION)")
+            if last_close and avg_close:
+                if last_close > avg_close:
+                    bias = "CALL"
+                    log("📈 BIAS DAILY")
+                else:
+                    bias = "PUT"
+                    log("📉 BIAS DAILY")
+        except:
+            pass
+
+    # -----------------------------
+    # 🔥 FALLBACK INTRADÍA
+    # -----------------------------
+    if bias is None:
+        log("⚠️ FALLBACK A INTRADÍA")
+
+        h1_temp = get_data(symbol, "1h", "5d")
+
+        if h1_temp is None:
+            log("❌ SIN DATA TOTAL")
+            return None
+
+        try:
+            last = safe(h1_temp.iloc[-2]["close"])
+            avg = safe(h1_temp["close"].tail(20).mean())
+
+            if last > avg:
+                bias = "CALL"
+            else:
+                bias = "PUT"
+
+        except:
+            return None
 
     # -----------------------------
     # INTRADÍA
@@ -178,7 +201,7 @@ def signal(symbol):
 
     strength = "FUERTE" if abs(score) >= 3 else "MEDIA"
 
-    log("🚀 SIGNAL PRO OK")
+    log("🚀 SIGNAL OK")
 
     return {
         "symbol": symbol,
