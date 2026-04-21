@@ -5,7 +5,7 @@ from datetime import datetime
 import pytz
 import math
 
-# 🔥 IB opcional
+# IB opcional
 try:
     from ib_options import get_best_option_ib
     IB_AVAILABLE = True
@@ -31,7 +31,7 @@ def safe(x):
         return None
 
 # -----------------------------
-# DATA (ROBUSTA)
+# DATA
 # -----------------------------
 def get_data(symbol, interval, period):
     try:
@@ -62,7 +62,7 @@ def get_data(symbol, interval, period):
         return None
 
 # -----------------------------
-# HORARIO PRO
+# HORARIO
 # -----------------------------
 def valid_session():
     ny = pytz.timezone("America/New_York")
@@ -83,7 +83,6 @@ def valid_session():
 # VELA
 # -----------------------------
 def candle_strength(c):
-
     o = safe(c["open"])
     c_ = safe(c["close"])
     h = safe(c["high"])
@@ -99,14 +98,12 @@ def candle_strength(c):
         return None
 
     strength = body / rng
-
     return strength, c_ > o
 
 # -----------------------------
 # CAPITAL
 # -----------------------------
 def position_size(strength, capital=1000):
-
     if strength == "FUERTE":
         return round(capital * 0.12, 2)
     elif strength == "MEDIA":
@@ -115,7 +112,6 @@ def position_size(strength, capital=1000):
         return round(capital * 0.03, 2)
 
 def take_profit(score):
-
     if abs(score) >= 3:
         return "40%-80%"
     elif abs(score) == 2:
@@ -138,7 +134,6 @@ def signal(symbol):
     # BIAS DAILY
     # -----------------------------
     d = get_data(symbol, "1d", "2mo")
-
     bias = None
 
     if d is not None:
@@ -150,7 +145,7 @@ def signal(symbol):
             log(f"📊 BIAS DAILY: {bias}")
 
     # -----------------------------
-    # FALLBACK BIAS ROBUSTO
+    # FALLBACK BIAS
     # -----------------------------
     if bias is None:
         log("⚠️ FALLBACK BIAS INTRADÍA")
@@ -158,17 +153,12 @@ def signal(symbol):
         temp = get_data(symbol, "1h", "5d")
 
         if temp is not None and len(temp) >= 3:
-
             last = safe(temp.iloc[-1]["close"])
             prev = safe(temp.iloc[-2]["close"])
 
             if last is not None and prev is not None:
                 bias = "CALL" if last > prev else "PUT"
                 log(f"📊 BIAS FALLBACK: {bias}")
-            else:
-                log("❌ FALLBACK SIN DATOS VALIDOS")
-        else:
-            log("❌ FALLBACK SIN DATA SUFICIENTE")
 
     if bias is None:
         log("❌ SIN BIAS FINAL")
@@ -179,15 +169,15 @@ def signal(symbol):
     # -----------------------------
     df = get_data(symbol, "1h", "10d")
 
-    if df is None:
-        log("❌ SIN DATA INTRADIA")
+    if df is None or len(df) < 3:
+        log("❌ DATA INTRADIA INSUFICIENTE")
         return None
 
     df["ema20"] = EMAIndicator(df["close"], 20).ema_indicator()
     df["rsi"] = RSIIndicator(df["close"], 14).rsi()
 
-    last = df.iloc[-2]
-    prev = df.iloc[-3]
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
     close = safe(last["close"])
     ema20 = safe(last["ema20"])
@@ -206,32 +196,27 @@ def signal(symbol):
     cs = candle_strength(last)
     if cs:
         strength_candle, bullish = cs
-
-        if bullish:
-            score += 1
-        else:
-            score -= 1
+        score += 1 if bullish else -1
 
         if strength_candle > 0.6:
             score += 1 if bullish else -1
 
     # momentum
-    if close > prev_close:
-        score += 1
-    else:
-        score -= 1
+    score += 1 if close > prev_close else -1
 
-    # ema
+    # EMA
     if bias == "CALL" and close > ema20:
         score += 1
     elif bias == "PUT" and close < ema20:
         score -= 1
 
-    # volumen
-    if volume > vol_avg * 0.6:
+    # volumen (más flexible)
+    if volume > vol_avg * 0.5:
         score += 1 if bias == "CALL" else -1
+    else:
+        log("⚠️ VOLUMEN BAJO PERMITIDO")
 
-    # rsi
+    # RSI
     if bias == "CALL" and rsi > 50:
         score += 1
     elif bias == "PUT" and rsi < 50:
@@ -239,9 +224,9 @@ def signal(symbol):
 
     log(f"🎯 SCORE: {score}")
 
-    if abs(score) < 1:
-        log("❌ SIN EDGE")
-        return None
+    # 🔥 NO BLOQUEA SI SCORE BAJO
+    if score == 0:
+        log("⚠️ SEÑAL DEBIL PERMITIDA")
 
     # -----------------------------
     # CLASIFICACIÓN
@@ -256,7 +241,7 @@ def signal(symbol):
     direction = "CALL" if score > 0 else "PUT"
 
     # -----------------------------
-    # OPTIONS (IB o fallback)
+    # OPTIONS
     # -----------------------------
     if IB_AVAILABLE:
         strike, expiry = get_best_option_ib(symbol, close, direction)
